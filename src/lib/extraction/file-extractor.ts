@@ -3,6 +3,7 @@ import { getDocumentKind, isImageFile } from "@/lib/upload-utils";
 export type ExtractionResult = {
   text: string;
   error?: string;
+  confidence?: number;
 };
 
 export async function extractTextFromFile(file: File): Promise<ExtractionResult> {
@@ -43,19 +44,30 @@ async function extractTextFromImage(file: File): Promise<ExtractionResult> {
   }
 
   const Tesseract = await import("tesseract.js");
-  const result = await Tesseract.recognize(file, "eng", {
+  const worker = await Tesseract.createWorker("eng", 1, {
     logger: () => undefined,
   });
-
-  const text = result.data.text?.trim() ?? "";
-  if (text.length < 10) {
-    return {
-      text,
-      error: "Image text could not be read clearly. Try a sharper screenshot.",
-    };
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+    });
+    const result = await worker.recognize(file);
+    const text = result.data.text?.trim() ?? "";
+    const confidence =
+      typeof result.data.confidence === "number"
+        ? Math.min(1, Math.max(0, result.data.confidence / 100))
+        : undefined;
+    if (text.length < 10) {
+      return {
+        text,
+        confidence,
+        error: "Image text could not be read clearly. Try a sharper screenshot.",
+      };
+    }
+    return { text, confidence };
+  } finally {
+    await worker.terminate();
   }
-
-  return { text };
 }
 
 async function extractTextFromPdf(file: File): Promise<ExtractionResult> {
@@ -82,14 +94,64 @@ async function extractTextFromPdf(file: File): Promise<ExtractionResult> {
   }
 
   const text = pages.join("\n").trim();
-  if (text.length < 10) {
+  if (text.length >= 80) {
+    return { text };
+  }
+
+  const ocrText = await ocrPdfPages(pdf, Math.min(pdf.numPages, 12));
+  const combined = [text, ocrText].filter(Boolean).join("\n").trim();
+  if (combined.length < 10) {
     return {
-      text,
+      text: combined,
       error: "PDF contains little extractable text. It may be a scanned image.",
     };
   }
+  return { text: combined };
+}
 
-  return { text };
+async function ocrPdfPages(
+  pdf: { numPages: number; getPage: (n: number) => Promise<unknown> },
+  maxPages: number,
+): Promise<string> {
+  if (typeof document === "undefined") return "";
+
+  const Tesseract = await import("tesseract.js");
+  const chunks: string[] = [];
+  const worker = await Tesseract.createWorker("eng", 1, {
+    logger: () => undefined,
+  });
+  try {
+    await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK });
+    for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
+      const page = (await pdf.getPage(pageNum)) as {
+        getViewport: (opts: { scale: number }) => {
+          width: number;
+          height: number;
+        };
+        render: (opts: {
+          canvasContext: CanvasRenderingContext2D;
+          viewport: { width: number; height: number };
+        }) => { promise: Promise<void> };
+      };
+      const viewport = page.getViewport({ scale: 1.6 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const context = canvas.getContext("2d");
+      if (!context) continue;
+      await page.render({ canvasContext: context, viewport }).promise;
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/png"),
+      );
+      if (!blob) continue;
+      const result = await worker.recognize(blob);
+      const pageText = result.data.text?.trim() ?? "";
+      if (pageText) chunks.push(pageText);
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return chunks.join("\n").trim();
 }
 
 async function extractTextFromCsv(file: File): Promise<ExtractionResult> {

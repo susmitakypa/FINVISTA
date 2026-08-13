@@ -1,7 +1,9 @@
 import type {
   DebtFacility,
   DocumentCoverage,
+  FinancialObservation,
   NormalizedFinancialData,
+  ObservationSourceKind,
   PeriodFinancialData,
   ProcessedFileRecord,
   QualitativeInsights,
@@ -13,16 +15,25 @@ import {
   createEmptyMarketData,
   createEmptyPeriod,
   createEmptyQualitative,
+  periodIdentityKey,
 } from "@/lib/financial-data-types";
 import type { UploadCategory, UploadedFileEntry } from "@/lib/upload-types";
+import { enrichPeriodsWithDerived } from "@/lib/analysis/derived-metrics";
 import { extractTextFromFile } from "./file-extractor";
+import { buildExtractionValidation } from "./extraction-validation";
 import {
   mergePeriodData,
   parseFinancialText,
   parseMarketData,
 } from "./financial-parser";
+import { consolidateExtractedPeriods } from "@/lib/financial-period-merge";
 import { mergeQualitative, parseQualitativeText } from "./qualitative-parser";
 import { mergeDebtFacilities, parseDebtFacilities } from "./debt-parser";
+import {
+  applyObservation,
+  parseChartObservations,
+  parseScreenerTables,
+} from "./screener-table-parser";
 
 type ProcessInput = {
   id: string;
@@ -30,18 +41,26 @@ type ProcessInput = {
   category: UploadCategory;
 };
 
-function periodKey(period: { year: number | null; period: string | null }): string {
-  if (period.year !== null) return `FY${period.year}`;
-  return period.period ?? "unknown";
+function sourceKind(
+  category: UploadCategory,
+  fromTable: boolean,
+  fromChart: boolean,
+): ObservationSourceKind {
+  if (category === "annual-report") return "annual_report";
+  if (fromChart) return "chart";
+  if (fromTable) return "screener_table";
+  return "screener_screenshot";
 }
 
-function sourceRank(category: UploadCategory, periodLabel: string | null): number {
-  const isQuarter = /Q[1-4]/i.test(periodLabel ?? "");
-  if (isQuarter && category === "quarterly-results") return 50;
-  if (!isQuarter && category === "annual-report") return 50;
+function sourceRank(
+  category: UploadCategory,
+  kind: ObservationSourceKind,
+): number {
+  if (kind === "annual_report" || category === "annual-report") return 50;
+  if (kind === "screener_table") return 35;
   if (category === "quarterly-results") return 40;
-  if (category === "annual-report") return 40;
-  if (category === "screener") return 30;
+  if (kind === "screener_screenshot") return 25;
+  if (kind === "chart") return 10;
   return 20;
 }
 
@@ -60,26 +79,27 @@ function mergePreferIncoming<T extends Record<string, number | null>>(
   return merged;
 }
 
-function mergeIntoPeriods(
+function mergeParsedPeriod(
   periods: PeriodFinancialData[],
-  parsed: ReturnType<typeof parseFinancialText>,
-  category: UploadCategory,
+  parsed: PeriodFinancialData,
+  rank: number,
   ranks: Map<string, number>,
 ): PeriodFinancialData[] {
-  const key = periodKey(parsed);
-  const incomingRank = sourceRank(category, parsed.period);
-  const existing = periods.find((item) => periodKey(item) === key);
+  const key = periodIdentityKey(parsed);
+  const existing = periods.find((item) => periodIdentityKey(item) === key);
   const existingRank = ranks.get(key) ?? 0;
-  const preferIncoming = incomingRank >= existingRank;
+  const preferIncoming = rank >= existingRank;
 
   if (existing) {
-    ranks.set(key, Math.max(existingRank, incomingRank));
+    ranks.set(key, Math.max(existingRank, rank));
     return periods.map((item) =>
-      periodKey(item) === key
+      periodIdentityKey(item) === key
         ? {
             ...item,
             period: item.period ?? parsed.period,
             year: item.year ?? parsed.year,
+            periodType:
+              item.periodType !== "unknown" ? item.periodType : parsed.periodType,
             incomeStatement: mergePreferIncoming(
               item.incomeStatement,
               parsed.incomeStatement,
@@ -101,96 +121,8 @@ function mergeIntoPeriods(
     );
   }
 
-  ranks.set(key, incomingRank);
-  return [
-    ...periods,
-    {
-      period: parsed.period,
-      year: parsed.year,
-      incomeStatement: parsed.incomeStatement,
-      balanceSheet: parsed.balanceSheet,
-      cashFlow: parsed.cashFlow,
-      ratios: parsed.ratios,
-    },
-  ];
-}
-
-function mergePeriodRecords(
-  existing: PeriodFinancialData,
-  incoming: PeriodFinancialData,
-): PeriodFinancialData {
-  return {
-    period: existing.period ?? incoming.period,
-    year: existing.year ?? incoming.year,
-    incomeStatement: mergePeriodData(
-      existing.incomeStatement,
-      incoming.incomeStatement,
-    ),
-    balanceSheet: mergePeriodData(existing.balanceSheet, incoming.balanceSheet),
-    cashFlow: mergePeriodData(existing.cashFlow, incoming.cashFlow),
-    ratios: mergePeriodData(existing.ratios, incoming.ratios),
-  };
-}
-
-function mergeSamePeriodKeys(
-  periods: PeriodFinancialData[],
-): PeriodFinancialData[] {
-  const merged = new Map<string, PeriodFinancialData>();
-  for (const period of periods) {
-    const key = periodKey(period);
-    const existing = merged.get(key);
-    merged.set(key, existing ? mergePeriodRecords(existing, period) : period);
-  }
-  return [...merged.values()];
-}
-
-function foldOutlierPeriods(periods: PeriodFinancialData[]): PeriodFinancialData[] {
-  if (periods.length <= 1) return periods;
-
-  const years = periods
-    .map((period) => period.year)
-    .filter((year): year is number => year !== null)
-    .sort((a, b) => a - b);
-
-  if (years.length === 0) {
-    return [periods.reduce((merged, period) => mergePeriodRecords(merged, period))];
-  }
-
-  const maxYear = years[years.length - 1]!;
-  const uniqueYears = [...new Set(years)];
-  const looksLikeHistory =
-    uniqueYears.length >= 3 && maxYear - uniqueYears[0]! <= uniqueYears.length + 2;
-
-  if (looksLikeHistory) {
-    const retagged = periods.map((period) =>
-      period.year === null
-        ? { ...period, year: maxYear, period: period.period ?? `FY${maxYear}` }
-        : period,
-    );
-    return mergeSamePeriodKeys(retagged);
-  }
-
-  let latest =
-    periods.find((period) => period.year === maxYear) ?? periods[0]!;
-  const kept: PeriodFinancialData[] = [];
-
-  for (const period of periods) {
-    if (period === latest) continue;
-    const isOutlier = period.year === null || maxYear - period.year >= 8;
-    if (isOutlier) {
-      latest = mergePeriodRecords(latest, period);
-    } else {
-      kept.push(period);
-    }
-  }
-
-  latest = {
-    ...latest,
-    year: maxYear,
-    period: latest.period ?? `FY${maxYear}`,
-  };
-
-  return mergeSamePeriodKeys([...kept, latest]);
+  ranks.set(key, rank);
+  return [...periods, parsed];
 }
 
 function coverageFromFiles(sourceFiles: ProcessedFileRecord[]): DocumentCoverage {
@@ -217,10 +149,14 @@ export async function processFinancialFiles(
   let debtFacilities: DebtFacility[] = [];
   const sourceFiles: ProcessedFileRecord[] = [];
   const ranks = new Map<string, number>();
+  const observations: FinancialObservation[] = [];
+  let screenshotsProcessed = 0;
 
   for (const { id, file, category } of files) {
     try {
       const extraction = await extractTextFromFile(file);
+      const isImage = file.type.startsWith("image/");
+      if (isImage) screenshotsProcessed += 1;
 
       if (extraction.error && extraction.text.length < 10) {
         sourceFiles.push({
@@ -236,15 +172,73 @@ export async function processFinancialFiles(
         continue;
       }
 
+      const confidence =
+        typeof extraction.confidence === "number"
+          ? extraction.confidence
+          : extraction.text.length > 80
+            ? 0.75
+            : 0.45;
+      const tableKind = sourceKind(category, true, false);
+      const table = parseScreenerTables(extraction.text, {
+        source: file.name,
+        confidence,
+        sourceKind: tableKind,
+      });
+      const chartObs = parseChartObservations(extraction.text, {
+        source: file.name,
+        confidence,
+      });
       const parsed = parseFinancialText(extraction.text);
       const market = parseMarketData(extraction.text);
       const incomingQualitative = parseQualitativeText(extraction.text);
 
       if (parsed.company && !company) company = parsed.company;
-      periods = mergeIntoPeriods(periods, parsed, category, ranks);
 
-      const preferMarket =
-        sourceRank(category, parsed.period) >= 30;
+      let fileFieldCount = 0;
+      if (table.periods.length > 0) {
+        const rank = sourceRank(category, tableKind);
+        for (const period of table.periods) {
+          periods = mergeParsedPeriod(periods, period, rank, ranks);
+          fileFieldCount += countExtractedFields(period);
+        }
+        observations.push(...table.observations);
+      } else {
+        const fallbackKind = sourceKind(category, false, false);
+        const rank = sourceRank(category, fallbackKind);
+        const fallbackPeriod = createEmptyPeriod(
+          parsed.period,
+          parsed.year,
+          parsed.periodType,
+        );
+        fallbackPeriod.incomeStatement = parsed.incomeStatement;
+        fallbackPeriod.balanceSheet = parsed.balanceSheet;
+        fallbackPeriod.cashFlow = parsed.cashFlow;
+        fallbackPeriod.ratios = parsed.ratios;
+        periods = mergeParsedPeriod(periods, fallbackPeriod, rank, ranks);
+        fileFieldCount = countExtractedFields(fallbackPeriod);
+      }
+
+      if (chartObs.length > 0) {
+        const rank = sourceRank(category, "chart");
+        for (const observation of chartObs) {
+          const target =
+            periods.find(
+              (item) =>
+                item.period === observation.period &&
+                item.periodType === observation.periodType,
+            ) ??
+            createEmptyPeriod(
+              observation.period,
+              observation.year,
+              observation.periodType,
+            );
+          applyObservation(target, observation, false);
+          periods = mergeParsedPeriod(periods, target, rank, ranks);
+        }
+        observations.push(...chartObs);
+      }
+
+      const preferMarket = sourceRank(category, tableKind) >= 30;
       Object.assign(
         marketData,
         preferMarket
@@ -261,16 +255,12 @@ export async function processFinancialFiles(
         parseDebtFacilities(extraction.text, category),
       );
 
-      const latestPeriod =
-        periods.find((item) => periodKey(item) === periodKey(parsed)) ??
-        createEmptyPeriod(parsed.period, parsed.year);
-
       const fieldsExtracted =
-        countExtractedFields(latestPeriod) +
+        fileFieldCount +
         Object.values(market).filter((value) => value !== null).length +
         Object.values(incomingQualitative).filter(Boolean).length;
 
-      const hasFinancialFields = fieldsExtracted > 0;
+      const hasFinancialFields = fieldsExtracted > 0 || table.observations.length > 0;
       const status =
         extraction.error || !hasFinancialFields
           ? "review"
@@ -305,8 +295,15 @@ export async function processFinancialFiles(
     }
   }
 
-  periods = foldOutlierPeriods(periods);
-  periods.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+  periods = consolidateExtractedPeriods(periods);
+  const enriched = enrichPeriodsWithDerived(periods);
+  periods = enriched.periods;
+  observations.push(...enriched.calculated);
+  periods.sort((a, b) => {
+    const yearDiff = (b.year ?? 0) - (a.year ?? 0);
+    if (yearDiff !== 0) return yearDiff;
+    return (a.period ?? "").localeCompare(b.period ?? "");
+  });
 
   if (periods.length === 0) {
     periods = [createEmptyPeriod()];
@@ -319,10 +316,12 @@ export async function processFinancialFiles(
     (file) => file.status === "review" || file.status === "partial",
   ).length;
 
-  return {
+  const data: NormalizedFinancialData = {
     company,
     currency: null,
     periods,
+    observations,
+    extractionValidation: null,
     marketData,
     qualitative,
     documentCoverage: coverageFromFiles(sourceFiles),
@@ -336,6 +335,15 @@ export async function processFinancialFiles(
       processedAt: new Date().toISOString(),
     },
   };
+
+  data.extractionValidation = buildExtractionValidation({
+    data,
+    observations,
+    screenshotsProcessed,
+    calculatedCount: enriched.calculated.length,
+  });
+
+  return data;
 }
 
 export function filesToProcessInput(

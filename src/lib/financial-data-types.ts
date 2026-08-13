@@ -2,6 +2,51 @@ import type { UploadCategory } from "./upload-types";
 
 export type FinancialValue = number | null;
 
+export type PeriodType = "annual" | "quarterly" | "unknown";
+
+export type ObservationOrigin = "extracted" | "calculated";
+
+export type ObservationSourceKind =
+  | "annual_report"
+  | "screener_table"
+  | "screener_screenshot"
+  | "chart";
+
+export type FinancialObservation = {
+  metric: string;
+  value: number;
+  unit: string | null;
+  period: string;
+  periodType: PeriodType;
+  year: number | null;
+  source: string;
+  sourceKind: ObservationSourceKind;
+  confidence: number;
+  rawText: string;
+  origin: ObservationOrigin;
+};
+
+export type RatioValidation = {
+  metric: string;
+  extracted: number;
+  calculated: number;
+  status: "validated" | "divergent" | "extracted-only";
+};
+
+export type ExtractionValidation = {
+  screenshotsProcessed: number;
+  filesProcessed: number;
+  valuesExtracted: number;
+  annualValues: number;
+  quarterlyValues: number;
+  directMetrics: number;
+  calculatedMetrics: number;
+  unavailableMetrics: number;
+  averageConfidence: number | null;
+  missingInputs: string[];
+  validations: RatioValidation[];
+};
+
 export type MarketData = {
   currentPrice: FinancialValue;
   marketCap: FinancialValue;
@@ -16,6 +61,7 @@ export type IncomeStatement = {
   revenue: FinancialValue;
   ebitda: FinancialValue;
   ebit: FinancialValue;
+  depreciation: FinancialValue;
   profitBeforeTax: FinancialValue;
   netProfit: FinancialValue;
   eps: FinancialValue;
@@ -54,15 +100,30 @@ export type FinancialRatios = {
   roce: FinancialValue;
   roa: FinancialValue;
   operatingMargin: FinancialValue;
+  ebitdaMargin: FinancialValue;
   netProfitMargin: FinancialValue;
+  fcfMargin: FinancialValue;
+  cfoMargin: FinancialValue;
   interestCoverage: FinancialValue;
   currentRatio: FinancialValue;
+  quickRatio: FinancialValue;
   assetTurnover: FinancialValue;
+  workingCapital: FinancialValue;
+  receivableDays: FinancialValue;
+  inventoryDays: FinancialValue;
+  payableDays: FinancialValue;
+  cashConversionCycle: FinancialValue;
+  cfoToPat: FinancialValue;
+  fcfToPat: FinancialValue;
+  netDebtToEbitda: FinancialValue;
+  debtToEbitda: FinancialValue;
+  cfoToInterest: FinancialValue;
 };
 
 export type PeriodFinancialData = {
   period: string | null;
   year: number | null;
+  periodType: PeriodType;
   incomeStatement: IncomeStatement;
   balanceSheet: BalanceSheet;
   cashFlow: CashFlow;
@@ -139,6 +200,8 @@ export type NormalizedFinancialData = {
   company: string | null;
   currency: string | null;
   periods: PeriodFinancialData[];
+  observations: FinancialObservation[];
+  extractionValidation: ExtractionValidation | null;
   marketData: MarketData;
   qualitative: QualitativeInsights;
   documentCoverage: DocumentCoverage;
@@ -152,6 +215,7 @@ export function createEmptyIncomeStatement(): IncomeStatement {
     revenue: null,
     ebitda: null,
     ebit: null,
+    depreciation: null,
     profitBeforeTax: null,
     netProfit: null,
     eps: null,
@@ -196,10 +260,24 @@ export function createEmptyRatios(): FinancialRatios {
     roce: null,
     roa: null,
     operatingMargin: null,
+    ebitdaMargin: null,
     netProfitMargin: null,
+    fcfMargin: null,
+    cfoMargin: null,
     interestCoverage: null,
     currentRatio: null,
+    quickRatio: null,
     assetTurnover: null,
+    workingCapital: null,
+    receivableDays: null,
+    inventoryDays: null,
+    payableDays: null,
+    cashConversionCycle: null,
+    cfoToPat: null,
+    fcfToPat: null,
+    netDebtToEbitda: null,
+    debtToEbitda: null,
+    cfoToInterest: null,
   };
 }
 
@@ -226,15 +304,69 @@ export function createEmptyDocumentCoverage(): DocumentCoverage {
 export function createEmptyPeriod(
   period: string | null = null,
   year: number | null = null,
+  periodType: PeriodType = "unknown",
 ): PeriodFinancialData {
   return {
     period,
     year,
+    periodType: periodType === "unknown" ? inferPeriodTypeFromLabel(period) : periodType,
     incomeStatement: createEmptyIncomeStatement(),
     balanceSheet: createEmptyBalanceSheet(),
     cashFlow: createEmptyCashFlow(),
     ratios: createEmptyRatios(),
   };
+}
+
+export function inferPeriodTypeFromLabel(label: string | null | undefined): PeriodType {
+  if (!label) return "unknown";
+  if (/Q[1-4]/i.test(label)) return "quarterly";
+  if (/FY\d{2,4}/i.test(label)) return "annual";
+  return "unknown";
+}
+
+export function inferPeriodType(period: {
+  period?: string | null;
+  periodType?: PeriodType;
+}): PeriodType {
+  if (period.periodType && period.periodType !== "unknown") return period.periodType;
+  return inferPeriodTypeFromLabel(period.period);
+}
+
+export function extractQuarter(label: string | null | undefined): string | null {
+  const match = label?.match(/Q[1-4]/i);
+  return match ? match[0]!.toUpperCase() : null;
+}
+
+export function comparablePeriods(
+  periods: PeriodFinancialData[],
+  prefer: Exclude<PeriodType, "unknown"> = "annual",
+): PeriodFinancialData[] {
+  const typed = periods.filter(
+    (period) =>
+      inferPeriodType(period) === prefer && countExtractedFields(period) > 0,
+  );
+  if (typed.length > 0) return typed;
+  const other: Exclude<PeriodType, "unknown"> =
+    prefer === "annual" ? "quarterly" : "annual";
+  const fallback = periods.filter(
+    (period) =>
+      inferPeriodType(period) === other && countExtractedFields(period) > 0,
+  );
+  return fallback.length > 0 ? fallback : periods;
+}
+
+export function periodIdentityKey(period: {
+  year: number | null;
+  period: string | null;
+  periodType?: PeriodType;
+}): string {
+  const type = inferPeriodType(period);
+  if (type === "quarterly") {
+    const quarter = extractQuarter(period.period) ?? "QX";
+    return `Q-${period.year ?? "na"}-${quarter}`;
+  }
+  if (period.year !== null) return `A-FY${period.year}`;
+  return `A-${period.period ?? "unknown"}`;
 }
 
 export function countExtractedFields(period: PeriodFinancialData): number {
@@ -314,6 +446,7 @@ export function hydrateNormalizedData(
     periods: (raw.periods ?? []).map((period) => ({
       period: period.period ?? null,
       year: period.year ?? null,
+      periodType: inferPeriodType(period),
       incomeStatement: {
         ...createEmptyIncomeStatement(),
         ...period.incomeStatement,
@@ -331,6 +464,8 @@ export function hydrateNormalizedData(
         ...period.ratios,
       },
     })),
+    observations: raw.observations ?? [],
+    extractionValidation: raw.extractionValidation ?? null,
     marketData: {
       ...createEmptyMarketData(),
       ...raw.marketData,

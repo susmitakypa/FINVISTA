@@ -5,7 +5,11 @@ import type {
   NormalizedFinancialData,
   PeriodFinancialData,
 } from "@/lib/financial-data-types";
-import { countExtractedFields, createEmptyDocumentCoverage } from "@/lib/financial-data-types";
+import {
+  countExtractedFields,
+  createEmptyDocumentCoverage,
+} from "@/lib/financial-data-types";
+import { assembleCreditSnapshot } from "@/lib/financial-period-merge";
 import { DOCUMENT_SOURCE_LABELS } from "@/lib/upload-types";
 
 export type TargetDscr = 1.25 | 1.5 | 1.75 | 2;
@@ -173,7 +177,14 @@ function metric(options: {
 
 function periodLabel(period: PeriodFinancialData | null): string | null {
   if (!period) return null;
-  return period.period ?? (period.year ? `FY${period.year}` : null);
+  const current = new Date().getFullYear();
+  if (period.year !== null && period.year >= current - 12) return `FY${period.year}`;
+  if (period.period && !/\b(19\d{2}|20(0\d|1[0-3]))\b/.test(period.period)) {
+    return period.period;
+  }
+  return period.year !== null && period.year >= current - 12
+    ? `FY${period.year}`
+    : null;
 }
 
 function selectLatest(periods: PeriodFinancialData[]): PeriodFinancialData | null {
@@ -238,7 +249,9 @@ export function analyzeDebtSizing(
 ): DebtSizingAnalysis | null {
   if (!data) return null;
 
-  const latest = selectLatest(data.periods ?? []);
+  const latest =
+    assembleCreditSnapshot(data.periods ?? []) ??
+    selectLatest(data.periods ?? []);
   const prior = selectPrior(data.periods ?? [], latest);
   const coverage = data.documentCoverage ?? createEmptyDocumentCoverage();
   const period = periodLabel(latest);
@@ -288,6 +301,7 @@ export function analyzeDebtSizing(
   }
 
   const cfo = latest?.cashFlow.operatingCashFlow ?? null;
+  const fcf = latest?.cashFlow.freeCashFlow ?? null;
   const cashTaxes = latest?.cashFlow.cashTaxes ?? null;
   const maintenanceCapex = latest?.cashFlow.maintenanceCapex ?? null;
   let cads: FinancialValue = null;
@@ -295,6 +309,9 @@ export function analyzeDebtSizing(
   if (cfo !== null) {
     cads = cfo;
     cadsMethod = "Operating cash flow (CFO)";
+  } else if (fcf !== null) {
+    cads = fcf;
+    cadsMethod = "Free cash flow (FCF)";
   } else if (
     ebitda !== null &&
     cashTaxes !== null &&
@@ -335,7 +352,6 @@ export function analyzeDebtSizing(
   const currentAssets = latest?.balanceSheet.currentAssets ?? null;
   const currentLiabilities = latest?.balanceSheet.currentLiabilities ?? null;
   const currentRatio = divide(currentAssets, currentLiabilities);
-  const fcf = latest?.cashFlow.freeCashFlow ?? null;
   const extractedOpm = latest?.ratios.operatingMargin ?? null;
   let operatingMargin: FinancialValue = extractedOpm;
   let opmMethod = "Extracted operating / EBITDA margin";
@@ -457,7 +473,9 @@ export function analyzeDebtSizing(
         ? `${cadsMethod} / (interest + principal)`
         : "DSCR = cash available for debt service / total debt service",
     requiredHint:
-      "Required: CFO (or EBITDA, cash taxes and maintenance capex) and debt-service information (interest and principal).",
+      dscr === null && principal === null
+        ? "DSCR cannot be calculated because principal repayment/debt-service information is not available."
+        : "Required: CFO (or EBITDA, cash taxes and maintenance capex) and debt-service information (interest and principal).",
   });
 
   const headlineDebtEquity = metric({

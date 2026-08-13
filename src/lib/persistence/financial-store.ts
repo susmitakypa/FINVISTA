@@ -1,5 +1,6 @@
 import type { NormalizedFinancialData } from "@/lib/financial-data-types";
 import { hydrateNormalizedData } from "@/lib/financial-data-types";
+import { consolidateExtractedPeriods } from "@/lib/financial-period-merge";
 import type {
   UploadCategory,
   UploadedFileEntry,
@@ -167,6 +168,15 @@ export async function savePersistedUploads(
   });
 }
 
+function withConsolidatedPeriods(
+  data: NormalizedFinancialData,
+): NormalizedFinancialData {
+  return {
+    ...data,
+    periods: consolidateExtractedPeriods(data.periods),
+  };
+}
+
 export async function loadPersistedFinancialData(): Promise<NormalizedFinancialData | null> {
   if (!isBrowser()) return null;
 
@@ -178,13 +188,13 @@ export async function loadPersistedFinancialData(): Promise<NormalizedFinancialD
     >,
   );
 
-  if (stored) return hydrateNormalizedData(stored);
+  if (stored) return withConsolidatedPeriods(hydrateNormalizedData(stored));
 
   try {
     const legacy = sessionStorage.getItem(LEGACY_SESSION_KEY);
     if (!legacy) return null;
     const parsed = JSON.parse(legacy) as NormalizedFinancialData;
-    const hydrated = hydrateNormalizedData(parsed);
+    const hydrated = withConsolidatedPeriods(hydrateNormalizedData(parsed));
     await savePersistedFinancialData(hydrated);
     return hydrated;
   } catch {

@@ -3,7 +3,10 @@ import type {
   NormalizedFinancialData,
   PeriodFinancialData,
 } from "@/lib/financial-data-types";
-import { countExtractedFields } from "@/lib/financial-data-types";
+import {
+  countExtractedFields,
+  comparablePeriods,
+} from "@/lib/financial-data-types";
 
 export type ScenarioKey = "bear" | "base" | "bull";
 
@@ -476,7 +479,7 @@ export function buildFinancialForecast(
 ): FinancialForecastModel | null {
   if (!data || data.periods.length === 0) return null;
 
-  const historical = buildHistorical(data.periods);
+  const historical = buildHistorical(comparablePeriods(data.periods, "annual"));
   if (historical.length === 0) return null;
 
   const derived = deriveForecastAssumptions(historical);

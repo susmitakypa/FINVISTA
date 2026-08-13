@@ -7,7 +7,7 @@ type ProcessingSummaryProps = {
 };
 
 export function ProcessingSummaryCard({ data }: ProcessingSummaryProps) {
-  const { summary, sourceFiles, documentCoverage } = data;
+  const { summary, sourceFiles, documentCoverage, extractionValidation } = data;
   const coverage = documentCoverage ?? {
     screener: false,
     annualReport: false,
@@ -76,6 +76,80 @@ export function ProcessingSummaryCard({ data }: ProcessingSummaryProps) {
           accent="amber"
         />
       </div>
+      {extractionValidation && (
+        <div className="mt-4 space-y-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Extraction validation
+          </h4>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <SummaryStat
+              label="Screenshots processed"
+              value={extractionValidation.screenshotsProcessed}
+              accent="sky"
+            />
+            <SummaryStat
+              label="Values extracted"
+              value={extractionValidation.valuesExtracted}
+              accent="emerald"
+            />
+            <SummaryStat
+              label="Annual values"
+              value={extractionValidation.annualValues}
+            />
+            <SummaryStat
+              label="Quarterly values"
+              value={extractionValidation.quarterlyValues}
+            />
+            <SummaryStat
+              label="Direct metrics"
+              value={extractionValidation.directMetrics}
+              accent="emerald"
+            />
+            <SummaryStat
+              label="Calculated metrics"
+              value={extractionValidation.calculatedMetrics}
+              accent="sky"
+            />
+            <SummaryStat
+              label="Still unavailable"
+              value={extractionValidation.unavailableMetrics}
+              accent="amber"
+            />
+            <SummaryStat
+              label="Avg OCR confidence %"
+              value={
+                extractionValidation.averageConfidence === null
+                  ? 0
+                  : Math.round(extractionValidation.averageConfidence * 100)
+              }
+            />
+          </div>
+          {extractionValidation.missingInputs.length > 0 && (
+            <p className="text-xs text-slate-500">
+              Missing required inputs:{" "}
+              {extractionValidation.missingInputs.join(", ")}
+            </p>
+          )}
+          {extractionValidation.validations.length > 0 && (
+            <ul className="space-y-1">
+              {extractionValidation.validations.slice(0, 12).map((item) => (
+                <li
+                  key={`${item.metric}-${item.status}`}
+                  className="text-xs text-slate-400"
+                >
+                  {item.status === "validated"
+                    ? "✓ VALIDATED"
+                    : item.status === "divergent"
+                      ? "⚠ Divergent"
+                      : "Extracted only"}{" "}
+                  {item.metric}: source {item.extracted.toFixed(2)} vs calculated{" "}
+                  {item.calculated.toFixed(2)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {sourceFiles.length > 0 && (
         <ul className="mt-4 space-y-2">
           {sourceFiles.map((file) => (

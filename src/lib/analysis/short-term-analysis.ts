@@ -4,6 +4,11 @@ import type {
   NormalizedFinancialData,
   PeriodFinancialData,
 } from "@/lib/financial-data-types";
+import {
+  comparablePeriods,
+  extractQuarter,
+  inferPeriodType,
+} from "@/lib/financial-data-types";
 
 export type MetricValue = {
   label: string;
@@ -114,11 +119,33 @@ export function analyzeShortTermInvestment(
 ): ShortTermAnalysis | null {
   if (!data || data.periods.length === 0) return null;
 
-  const sorted = [...data.periods].sort(
-    (a, b) => (b.year ?? 0) - (a.year ?? 0),
+  const quarterly = comparablePeriods(data.periods, "quarterly").filter(
+    (period) => inferPeriodType(period) === "quarterly",
   );
+  const pool =
+    quarterly.length >= 2
+      ? quarterly
+      : comparablePeriods(data.periods, "annual");
+  const sorted = [...pool].sort((a, b) => {
+    const yearDiff = (b.year ?? 0) - (a.year ?? 0);
+    if (yearDiff !== 0) return yearDiff;
+    return (extractQuarter(b.period) ?? "").localeCompare(
+      extractQuarter(a.period) ?? "",
+    );
+  });
   const latest = sorted[0] ?? null;
-  const prior = sorted[1] ?? null;
+  const prior = latest
+    ? sorted.find((period) => {
+        if (period === latest) return false;
+        if (inferPeriodType(latest) === "quarterly") {
+          return (
+            extractQuarter(period.period) === extractQuarter(latest.period) &&
+            (period.year ?? 0) < (latest.year ?? 0)
+          );
+        }
+        return (period.year ?? 0) < (latest.year ?? 0);
+      }) ?? sorted[1] ?? null
+    : null;
 
   const valuationMetrics: MetricValue[] = [
     metric("Current Price", data.marketData.currentPrice, " ₹"),

@@ -1,4 +1,13 @@
 import type { MarketData } from "../financial-data-types";
+import {
+  createEmptyBalanceSheet,
+  createEmptyCashFlow,
+  createEmptyIncomeStatement,
+  createEmptyRatios,
+  inferPeriodTypeFromLabel,
+  type PeriodType,
+} from "../financial-data-types";
+import { specsForSection, type FieldPattern } from "./metric-aliases";
 
 export function parseFinancialNumber(raw: string): number | null {
   const trimmed = raw.trim();
@@ -163,103 +172,11 @@ export function extractPeriodInfo(text: string): {
   return best ?? { period: null, year: null };
 }
 
-type FieldPattern = {
-  key: string;
-  labels: RegExp[];
-  preferPercentage?: boolean;
-};
-
-const INCOME_PATTERNS: FieldPattern[] = [
-  { key: "revenue", labels: [/total revenue/i, /revenue from operations/i, /net sales/i, /sales\s*\+?/i, /revenue/i] },
-  { key: "ebitda", labels: [/\bebitda\b/i] },
-  { key: "ebit", labels: [/operating profit/i, /\bebit\b/i, /pbdit/i, /op\.?\s*profit/i] },
-  { key: "profitBeforeTax", labels: [/profit before tax/i, /\bpbt\b/i, /profit before taxation/i] },
-  { key: "netProfit", labels: [/profit after tax/i, /net profit/i, /\bpat\b/i, /net income/i] },
-  { key: "eps", labels: [/\beps\b/i, /earnings per share/i] },
-  {
-    key: "interestExpense",
-    labels: [
-      /finance costs?/i,
-      /interest expense/i,
-      /interest paid/i,
-      /finance charges?/i,
-      /\binterest\b(?!\s+cover)/i,
-    ],
-  },
-];
-
-const BALANCE_PATTERNS: FieldPattern[] = [
-  { key: "totalAssets", labels: [/total assets/i, /assets total/i] },
-  {
-    key: "totalEquity",
-    labels: [
-      /total equity/i,
-      /shareholders.? funds/i,
-      /net worth/i,
-      /total shareholders/i,
-      /equity share capital/i,
-    ],
-  },
-  {
-    key: "totalDebt",
-    labels: [
-      /total debt/i,
-      /total borrowings/i,
-      /borrowings?/i,
-    ],
-  },
-  { key: "netDebt", labels: [/net debt/i] },
-  {
-    key: "cash",
-    labels: [
-      /cash and cash equivalents/i,
-      /cash\s*&\s*cash equivalents/i,
-      /cash equivalents/i,
-      /cash\s*&\s*bank/i,
-      /\bcash\b/i,
-    ],
-  },
-  { key: "receivables", labels: [/trade receivables/i, /receivables/i] },
-  { key: "inventory", labels: [/inventor(?:y|ies)/i] },
-  { key: "payables", labels: [/trade payables/i, /payables/i] },
-  { key: "currentAssets", labels: [/current assets/i, /total current assets/i] },
-  { key: "currentLiabilities", labels: [/current liabilities/i, /total current liabilities/i] },
-  { key: "shortTermDebt", labels: [/short[- ]term (?:debt|borrowings)/i, /current borrowings/i, /current portion of (?:long[- ]term )?(?:debt|borrowings)/i] },
-  { key: "longTermDebt", labels: [/long[- ]term (?:debt|borrowings)/i, /non[- ]current borrowings/i] },
-];
-
-const CASHFLOW_PATTERNS: FieldPattern[] = [
-  {
-    key: "operatingCashFlow",
-    labels: [
-      /cash from operating/i,
-      /cash[- ]flow from operat/i,
-      /operating cash flow/i,
-      /net cash from operating/i,
-      /cash from operations/i,
-      /\bcfo\b/i,
-    ],
-  },
-  { key: "capitalExpenditure", labels: [/capital expenditure/i, /\bcapex\b/i, /purchase of (?:ppe|fixed assets)/i] },
-  { key: "freeCashFlow", labels: [/free cash flow/i, /\bfcf\b/i] },
-  { key: "financingCashFlow", labels: [/cash from financing/i, /financing cash flow/i, /net cash from financing/i] },
-  { key: "investingCashFlow", labels: [/cash from investing/i, /investing cash flow/i, /net cash from investing/i] },
-  { key: "principalRepayment", labels: [/repayment of (?:borrowings|debt|loans?)/i, /principal repayment/i, /debt repaid/i] },
-  { key: "cashTaxes", labels: [/taxes? paid/i, /income tax paid/i, /direct taxes? paid/i] },
-  { key: "maintenanceCapex", labels: [/maintenance capex/i, /maintenance capital expenditure/i] },
-];
-
-const RATIO_PATTERNS: FieldPattern[] = [
-  { key: "debtToEquity", labels: [/debt.?equity/i, /debt to equity/i, /\bd\/e\b/i] },
-  { key: "roe", labels: [/\broe\b/i, /return on equity/i] },
-  { key: "roce", labels: [/\broce\b/i, /return on capital employed/i] },
-  { key: "roa", labels: [/\broa\b/i, /return on assets/i] },
-  { key: "operatingMargin", labels: [/operating margin/i, /\bopm\b/i, /ebitda margin/i] },
-  { key: "netProfitMargin", labels: [/net profit margin/i, /\bnpm\b/i, /profit margin/i] },
-  { key: "interestCoverage", labels: [/interest coverage/i, /interest cover/i] },
-  { key: "currentRatio", labels: [/current ratio/i] },
-  { key: "assetTurnover", labels: [/asset turnover/i] },
-];
+const INCOME_PATTERNS = specsForSection("incomeStatement");
+const BALANCE_PATTERNS = specsForSection("balanceSheet");
+const CASHFLOW_PATTERNS = specsForSection("cashFlow");
+const RATIO_PATTERNS = specsForSection("ratios");
+const MARKET_PATTERNS = specsForSection("marketData");
 
 function lineMatchesLabel(line: string, labels: RegExp[]): boolean {
   return labels.some((label) => label.test(line));
@@ -355,37 +272,17 @@ export function parseFinancialText(text: string) {
 
   const { period, year } = extractPeriodInfo(normalized);
   const company = extractCompanyName(normalized);
+  const periodType: PeriodType = inferPeriodTypeFromLabel(period);
 
   const incomeStatement = applyPatterns(
-    {
-      revenue: null,
-      ebitda: null,
-      ebit: null,
-      profitBeforeTax: null,
-      netProfit: null,
-      eps: null,
-      interestExpense: null,
-    },
+    createEmptyIncomeStatement(),
     lines,
     INCOME_PATTERNS,
     ALL_FIELD_PATTERNS,
   );
 
   const balanceSheet = applyPatterns(
-    {
-      totalAssets: null,
-      totalEquity: null,
-      totalDebt: null,
-      netDebt: null,
-      cash: null,
-      receivables: null,
-      inventory: null,
-      payables: null,
-      currentAssets: null,
-      currentLiabilities: null,
-      shortTermDebt: null,
-      longTermDebt: null,
-    },
+    createEmptyBalanceSheet(),
     lines,
     BALANCE_PATTERNS,
     ALL_FIELD_PATTERNS,
@@ -411,33 +308,14 @@ export function parseFinancialText(text: string) {
   const balanced = { ...balanceSheet, totalEquity };
 
   const cashFlow = applyPatterns(
-    {
-      operatingCashFlow: null,
-      capitalExpenditure: null,
-      freeCashFlow: null,
-      financingCashFlow: null,
-      investingCashFlow: null,
-      principalRepayment: null,
-      cashTaxes: null,
-      maintenanceCapex: null,
-    },
+    createEmptyCashFlow(),
     lines,
     CASHFLOW_PATTERNS,
     ALL_FIELD_PATTERNS,
   );
 
   const ratios = applyPatterns(
-    {
-      debtToEquity: null,
-      roe: null,
-      roce: null,
-      roa: null,
-      operatingMargin: null,
-      netProfitMargin: null,
-      interestCoverage: null,
-      currentRatio: null,
-      assetTurnover: null,
-    },
+    createEmptyRatios(),
     lines,
     RATIO_PATTERNS.map((pattern) => ({
       ...pattern,
@@ -456,6 +334,7 @@ export function parseFinancialText(text: string) {
     company,
     period,
     year,
+    periodType,
     incomeStatement,
     balanceSheet: balanced,
     cashFlow,
@@ -476,16 +355,6 @@ export function mergePeriodData<T extends Record<string, number | null>>(
   }
   return merged;
 }
-
-const MARKET_PATTERNS: FieldPattern[] = [
-  { key: "currentPrice", labels: [/current price/i, /cmp/i, /market price/i, /stock price/i] },
-  { key: "marketCap", labels: [/market cap/i, /market capitalization/i, /mcap/i] },
-  { key: "pe", labels: [/\bp\/e\b/i, /price to earning/i, /price.?earnings/i, /\bpe ratio\b/i] },
-  { key: "pb", labels: [/\bp\/b\b/i, /price to book/i, /\bpb ratio\b/i] },
-  { key: "dividendYield", labels: [/dividend yield/i, /\bdiv yield\b/i], preferPercentage: true },
-  { key: "promoterHolding", labels: [/promoter holding/i, /promoters.? holding/i, /promoter shareholding/i], preferPercentage: true },
-  { key: "promoterHoldingChange", labels: [/promoter holding change/i, /change in promoter/i, /promoter.*change/i], preferPercentage: true },
-];
 
 export function parseMarketData(text: string): MarketData {
   const lines = normalizeText(text)

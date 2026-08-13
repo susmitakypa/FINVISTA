@@ -6,6 +6,7 @@ import type {
   QualitativeInsights,
 } from "@/lib/financial-data-types";
 import {
+  comparablePeriods,
   countExtractedFields,
   createEmptyQualitative,
 } from "@/lib/financial-data-types";
@@ -631,7 +632,7 @@ export function analyzeLongTermInvestment(
     return null;
   }
 
-  const periods = data.periods ?? [];
+  const periods = comparablePeriods(data.periods ?? [], "annual");
 
   const latest = selectLatest(periods);
   const prior = selectPrior(periods, latest);
