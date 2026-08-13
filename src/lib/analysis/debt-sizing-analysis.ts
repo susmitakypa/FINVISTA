@@ -6,10 +6,14 @@ import type {
   PeriodFinancialData,
 } from "@/lib/financial-data-types";
 import {
+  comparablePeriods,
   countExtractedFields,
   createEmptyDocumentCoverage,
+  inferPeriodType,
+  periodIdentityKey,
 } from "@/lib/financial-data-types";
-import { assembleCreditSnapshot } from "@/lib/financial-period-merge";
+import { enrichPeriodWithDerived } from "@/lib/analysis/derived-metrics";
+import { mergePeriodRecords } from "@/lib/financial-period-merge";
 import { DOCUMENT_SOURCE_LABELS } from "@/lib/upload-types";
 
 export type TargetDscr = 1.25 | 1.5 | 1.75 | 2;
@@ -21,6 +25,7 @@ export type DebtSizingOptions = {
   assumedInterestRatePct: FinancialValue;
   assumedTenorYears: FinancialValue;
   assumedPrincipal: FinancialValue;
+  periodKey?: string | null;
 };
 
 export type CreditMetric = {
@@ -32,6 +37,13 @@ export type CreditMetric = {
   source: string;
   methodology: string;
   requiredHint?: string;
+  validation?: "validated" | "discrepancy";
+  validationNote?: string;
+};
+
+export type CreditPeriodOption = {
+  key: string;
+  label: string;
 };
 
 export type DscrBand =
@@ -95,11 +107,18 @@ export type DebtSizingAnalysis = {
     interestCoverage: CreditMetric;
   };
   dscrBand: DscrBand;
+  trueDscrUnavailableReason: string | null;
+  leverage: CreditMetric[];
+  coverageMetrics: CreditMetric[];
+  cashFlowMetrics: CreditMetric[];
   cads: CreditMetric;
   interest: CreditMetric;
   principal: CreditMetric;
   debtService: CreditMetric;
   cashInterestCover: CreditMetric;
+  fcfInterest: CreditMetric;
+  periodOptions: CreditPeriodOption[];
+  selectedPeriodKey: string | null;
   facilities: DebtFacility[];
   capacity: {
     existingDebt: CreditMetric;
@@ -136,7 +155,7 @@ export type DebtSizingAnalysis = {
   unavailableFields: string[];
 };
 
-const UNAVAILABLE = "Data unavailable";
+const UNAVAILABLE = "Insufficient data";
 
 function finite(value: number | null | undefined): FinancialValue {
   if (value === null || value === undefined) return null;
@@ -162,6 +181,8 @@ function metric(options: {
   source: string;
   methodology: string;
   requiredHint?: string;
+  validation?: "validated" | "discrepancy";
+  validationNote?: string;
 }): CreditMetric {
   return {
     label: options.label,
@@ -172,19 +193,100 @@ function metric(options: {
     source: options.source,
     methodology: options.methodology,
     requiredHint: options.requiredHint,
+    validation: options.validation,
+    validationNote: options.validationNote,
   };
+}
+
+function nearlyEqual(left: number, right: number): boolean {
+  const scale = Math.max(Math.abs(left), Math.abs(right), 1);
+  return Math.abs(left - right) / scale <= 0.08 || Math.abs(left - right) <= 0.15;
+}
+
+function compareExtracted(
+  extracted: FinancialValue,
+  calculated: FinancialValue,
+): { validation?: "validated" | "discrepancy"; validationNote?: string } {
+  if (extracted === null || calculated === null) return {};
+  if (nearlyEqual(extracted, calculated)) {
+    return {
+      validation: "validated",
+      validationNote: `✓ Calculation validated (source ${extracted.toFixed(2)} vs calculated ${calculated.toFixed(2)})`,
+    };
+  }
+  return {
+    validation: "discrepancy",
+    validationNote: `Source/calculation discrepancy (source ${extracted.toFixed(2)} vs calculated ${calculated.toFixed(2)})`,
+  };
+}
+
+function fcfFrom(cfo: FinancialValue, capex: FinancialValue): FinancialValue {
+  if (cfo === null || capex === null) return null;
+  return capex < 0 ? finite(cfo + capex) : finite(cfo - capex);
+}
+
+function documentSource(coverage: DocumentCoverage): string {
+  if (coverage.annualReport) return "Annual Report";
+  if (coverage.screener) return "Screener";
+  if (coverage.quarterlyResults) return "Quarterly results";
+  return "Uploaded documents";
 }
 
 function periodLabel(period: PeriodFinancialData | null): string | null {
   if (!period) return null;
-  const current = new Date().getFullYear();
-  if (period.year !== null && period.year >= current - 12) return `FY${period.year}`;
-  if (period.period && !/\b(19\d{2}|20(0\d|1[0-3]))\b/.test(period.period)) {
-    return period.period;
+  if (period.period) return period.period;
+  if (period.year !== null) {
+    return inferPeriodType(period) === "quarterly"
+      ? `Q FY${period.year}`
+      : `FY${period.year}`;
   }
-  return period.year !== null && period.year >= current - 12
-    ? `FY${period.year}`
-    : null;
+  return null;
+}
+
+export function listCreditPeriods(
+  data: NormalizedFinancialData | null,
+): CreditPeriodOption[] {
+  if (!data) return [];
+  const annual = comparablePeriods(data.periods ?? [], "annual");
+  const pool =
+    annual.length > 0
+      ? annual
+      : comparablePeriods(data.periods ?? [], "quarterly");
+  const seen = new Set<string>();
+  const options: CreditPeriodOption[] = [];
+  for (const period of [...pool].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))) {
+    const key = periodIdentityKey(period);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push({
+      key,
+      label: periodLabel(period) ?? key,
+    });
+  }
+  return options;
+}
+
+function selectMatchingPeriod(
+  periods: PeriodFinancialData[],
+  periodKey?: string | null,
+): PeriodFinancialData | null {
+  const annual = comparablePeriods(periods, "annual");
+  const pool =
+    annual.length > 0 ? annual : comparablePeriods(periods, "quarterly");
+  if (pool.length === 0) return null;
+
+  const latest = selectLatest(pool);
+  const targetKey = periodKey || (latest ? periodIdentityKey(latest) : null);
+  const matched = targetKey
+    ? pool.filter((period) => periodIdentityKey(period) === targetKey)
+    : pool.slice(0, 1);
+  const base = matched[0] ?? latest;
+  if (!base) return null;
+  const merged = matched.slice(1).reduce(
+    (current, period) => mergePeriodRecords(current, period),
+    base,
+  );
+  return enrichPeriodWithDerived(merged).period;
 }
 
 function selectLatest(periods: PeriodFinancialData[]): PeriodFinancialData | null {
@@ -204,8 +306,13 @@ function selectPrior(
   latest: PeriodFinancialData | null,
 ): PeriodFinancialData | null {
   if (!latest) return null;
+  const latestKey = periodIdentityKey(latest);
   const others = periods
-    .filter((period) => period !== latest && countExtractedFields(period) > 0)
+    .filter(
+      (period) =>
+        periodIdentityKey(period) !== latestKey &&
+        countExtractedFields(period) > 0,
+    )
     .sort((a, b) => (b.year ?? -1) - (a.year ?? -1));
   return others[0] ?? null;
 }
@@ -241,6 +348,7 @@ export const DEFAULT_DEBT_OPTIONS: DebtSizingOptions = {
   assumedInterestRatePct: null,
   assumedTenorYears: null,
   assumedPrincipal: null,
+  periodKey: null,
 };
 
 export function analyzeDebtSizing(
@@ -249,26 +357,39 @@ export function analyzeDebtSizing(
 ): DebtSizingAnalysis | null {
   if (!data) return null;
 
-  const latest =
-    assembleCreditSnapshot(data.periods ?? []) ??
-    selectLatest(data.periods ?? []);
-  const prior = selectPrior(data.periods ?? [], latest);
+  const periodOptions = listCreditPeriods(data);
+  const latest = selectMatchingPeriod(data.periods ?? [], options.periodKey);
+  const priorType =
+    latest && inferPeriodType(latest) === "quarterly" ? "quarterly" : "annual";
+  const prior = selectPrior(
+    comparablePeriods(data.periods ?? [], priorType),
+    latest,
+  );
   const coverage = data.documentCoverage ?? createEmptyDocumentCoverage();
   const period = periodLabel(latest);
+  const extractedSource = documentSource(coverage);
+  const calculatedSource = coverage.annualReport
+    ? "Calculated from Annual Report"
+    : "Calculated from Screener";
   const sourceFiles = (data.sourceFiles ?? [])
     .filter((file) => file.status !== "failed")
     .map((file) => DOCUMENT_SOURCE_LABELS[file.category] ?? file.category);
   const sourceSummary =
     sourceFiles.length > 0
       ? Array.from(new Set(sourceFiles)).join(", ")
-      : "Uploaded documents";
-  const periodSource = period ? `${sourceSummary} · ${period}` : sourceSummary;
+      : extractedSource;
+  const periodSource = period ? `${extractedSource} · ${period}` : extractedSource;
   const facilities = data.debtFacilities ?? [];
 
   const revenue = latest?.incomeStatement.revenue ?? null;
-  const ebitda = latest?.incomeStatement.ebitda ?? null;
+  let ebitda = latest?.incomeStatement.ebitda ?? null;
   const ebit = latest?.incomeStatement.ebit ?? null;
+  const depreciation = latest?.incomeStatement.depreciation ?? null;
+  if (ebitda === null && ebit !== null && depreciation !== null) {
+    ebitda = finite(ebit + Math.abs(depreciation));
+  }
   const pbt = latest?.incomeStatement.profitBeforeTax ?? null;
+  const pat = latest?.incomeStatement.netProfit ?? null;
   const extractedInterest = latest?.incomeStatement.interestExpense ?? null;
   const impliedInterest =
     ebit !== null && pbt !== null && ebit > pbt ? finite(ebit - pbt) : null;
@@ -278,21 +399,24 @@ export function analyzeDebtSizing(
   let interestMethod = "Extracted finance cost / interest expense";
   if (interest === null && impliedInterest !== null) {
     interest = impliedInterest;
-    interestMethod = "Implied interest = EBIT − PBT (P&L)";
+    interestSource = calculatedSource;
+    interestMethod = "EBIT − PBT";
   }
   if (interest === null && facilityInterest !== null) {
     interest = facilityInterest;
+    interestSource = "Extracted debt schedule";
     interestMethod = "Sum of extracted facility annual interest";
   }
 
   const extractedPrincipal = latest?.cashFlow.principalRepayment ?? null;
   const facilityPrincipal = sum(facilities.map((item) => item.annualPrincipal));
   let principal: FinancialValue = extractedPrincipal ?? facilityPrincipal;
-  let principalMethod = extractedPrincipal !== null
-    ? "Extracted repayment of borrowings / principal"
-    : facilityPrincipal !== null
-      ? "Sum of facility annual principal"
-      : "Not extracted";
+  let principalMethod =
+    extractedPrincipal !== null
+      ? "Extracted repayment of borrowings / principal"
+      : facilityPrincipal !== null
+        ? "Sum of facility annual principal"
+        : "Not extracted — not assumed from outstanding debt";
   let principalSource = periodSource;
   if (principal === null && options.assumedPrincipal !== null) {
     principal = options.assumedPrincipal;
@@ -301,9 +425,16 @@ export function analyzeDebtSizing(
   }
 
   const cfo = latest?.cashFlow.operatingCashFlow ?? null;
-  const fcf = latest?.cashFlow.freeCashFlow ?? null;
+  const capex = latest?.cashFlow.capitalExpenditure ?? null;
+  const extractedFcf = latest?.cashFlow.freeCashFlow ?? null;
+  const calculatedFcf = fcfFrom(cfo, capex);
+  const fcf = extractedFcf ?? calculatedFcf;
+  const fcfCalculated = extractedFcf === null && calculatedFcf !== null;
+  const investingCf = latest?.cashFlow.investingCashFlow ?? null;
+  const financingCf = latest?.cashFlow.financingCashFlow ?? null;
   const cashTaxes = latest?.cashFlow.cashTaxes ?? null;
   const maintenanceCapex = latest?.cashFlow.maintenanceCapex ?? null;
+
   let cads: FinancialValue = null;
   let cadsMethod = "Not available";
   if (cfo !== null) {
@@ -321,15 +452,26 @@ export function analyzeDebtSizing(
     cadsMethod = "EBITDA − cash taxes − maintenance capex";
   }
 
+  const trueDscrPossible = principal !== null && interest !== null && cads !== null;
   const debtService =
     interest !== null && principal !== null
       ? finite(interest + principal)
       : null;
-  const dscr = divide(cads, debtService);
-  const cashInterestCover = divide(cads, interest);
+  const dscr = trueDscrPossible ? divide(cads, debtService) : null;
+  const trueDscrUnavailableReason =
+    dscr !== null
+      ? null
+      : principal === null
+        ? "Principal repayment/debt-service schedule is not available in the uploaded data."
+        : interest === null
+          ? "True DSCR requires interest expense in addition to principal repayment."
+          : "True DSCR requires cash available for debt service (CFO or FCF).";
+  const cfoInterest = divide(cfo, interest);
+  const fcfInterest = divide(fcf, interest);
 
   const equity = latest?.balanceSheet.totalEquity ?? null;
   const cash = latest?.balanceSheet.cash ?? null;
+  const totalAssets = latest?.balanceSheet.totalAssets ?? null;
   const extractedNetDebt = latest?.balanceSheet.netDebt ?? null;
   let totalDebt = latest?.balanceSheet.totalDebt ?? null;
   const shortTerm = latest?.balanceSheet.shortTermDebt ?? null;
@@ -341,14 +483,18 @@ export function analyzeDebtSizing(
     const facilityDebt = sum(facilities.map((item) => item.outstanding));
     if (facilityDebt !== null) totalDebt = facilityDebt;
   }
-  const netDebt =
-    extractedNetDebt ??
-    (totalDebt !== null && cash !== null ? finite(totalDebt - cash) : null);
+  const calculatedNetDebt =
+    totalDebt !== null && cash !== null ? finite(totalDebt - cash) : null;
+  const netDebt = extractedNetDebt ?? calculatedNetDebt;
   const extractedDe = latest?.ratios.debtToEquity ?? null;
-  const debtEquity = extractedDe ?? divide(totalDebt, equity);
+  const calculatedDe = divide(totalDebt, equity);
+  const debtEquity = extractedDe ?? calculatedDe;
   const debtEbitda = divide(totalDebt, ebitda);
+  const netDebtEbitda = divide(netDebt, ebitda);
+  const debtAssets = divide(totalDebt, totalAssets);
   const extractedCoverage = latest?.ratios.interestCoverage ?? null;
-  const interestCoverage = extractedCoverage ?? divide(ebit, interest);
+  const calculatedCoverage = divide(ebit, interest);
+  const interestCoverage = extractedCoverage ?? calculatedCoverage;
   const currentAssets = latest?.balanceSheet.currentAssets ?? null;
   const currentLiabilities = latest?.balanceSheet.currentLiabilities ?? null;
   const currentRatio = divide(currentAssets, currentLiabilities);
@@ -367,6 +513,20 @@ export function analyzeDebtSizing(
     operatingMargin = finite((ebitda / revenue) * 100);
     opmMethod = "EBITDA / revenue";
   }
+  const fcfMargin =
+    fcf !== null && revenue !== null && revenue !== 0
+      ? finite((fcf / revenue) * 100)
+      : null;
+  const cfoMargin =
+    cfo !== null && revenue !== null && revenue !== 0
+      ? finite((cfo / revenue) * 100)
+      : null;
+  const cfoToPat = divide(cfo, pat);
+  const fcfToPat = divide(fcf, pat);
+
+  const deCompare = compareExtracted(extractedDe, calculatedDe);
+  const coverageCompare = compareExtracted(extractedCoverage, calculatedCoverage);
+  const netDebtCompare = compareExtracted(extractedNetDebt, calculatedNetDebt);
 
   const facilityRate = (() => {
     const rates = facilities
@@ -378,34 +538,56 @@ export function analyzeDebtSizing(
   const rateForSizing = options.assumedInterestRatePct ?? facilityRate;
   const tenorForSizing = options.assumedTenorYears;
 
-  const maxDebtService = divide(cads, options.targetDscr);
-  const maxDebt = annuityPrincipal(maxDebtService, rateForSizing, tenorForSizing);
+  const canSizeFromTrueDscr = dscr !== null;
+  const maxDebtService = canSizeFromTrueDscr
+    ? divide(cads, options.targetDscr)
+    : null;
+  const maxDebt = canSizeFromTrueDscr
+    ? annuityPrincipal(maxDebtService, rateForSizing, tenorForSizing)
+    : null;
   const additionalCapacity =
     maxDebt !== null && totalDebt !== null ? finite(maxDebt - totalDebt) : null;
 
-  const capacityAssumptions: string[] = [
-    `Target DSCR = ${options.targetDscr.toFixed(2)}x`,
-    cads !== null ? `CADS method: ${cadsMethod}` : "CADS unavailable",
-  ];
-  if (rateForSizing !== null) {
+  const capacityAssumptions: string[] = [];
+  if (debtEbitda !== null) {
     capacityAssumptions.push(
-      options.assumedInterestRatePct !== null
-        ? `Interest rate assumption ${rateForSizing}%`
-        : `Extracted average facility rate ${rateForSizing.toFixed(2)}%`,
+      `Current Debt / EBITDA = ${debtEbitda.toFixed(2)}x (${period ?? "selected period"}).`,
+    );
+  }
+  if (netDebtEbitda !== null) {
+    capacityAssumptions.push(
+      `Current Net Debt / EBITDA = ${netDebtEbitda.toFixed(2)}x.`,
+    );
+  }
+  if (!canSizeFromTrueDscr) {
+    capacityAssumptions.push(
+      "True DSCR-based debt sizing is unavailable without principal repayment. Target leverage (Debt/EBITDA) has not been assumed.",
     );
   } else {
     capacityAssumptions.push(
-      "Maximum debt stock requires an interest rate (extracted or assumption).",
+      `Target DSCR = ${options.targetDscr.toFixed(2)}x (user-selected assumption).`,
     );
-  }
-  if (tenorForSizing !== null) {
-    capacityAssumptions.push(
-      `Amortising tenor assumption ${tenorForSizing} years`,
-    );
-  } else if (rateForSizing !== null) {
-    capacityAssumptions.push(
-      "No tenor entered — debt stock estimated on an interest-only basis (PMT / rate).",
-    );
+    capacityAssumptions.push(cads !== null ? `CADS method: ${cadsMethod}` : "CADS unavailable");
+    if (rateForSizing !== null) {
+      capacityAssumptions.push(
+        options.assumedInterestRatePct !== null
+          ? `Interest rate assumption ${rateForSizing}%`
+          : `Extracted average facility rate ${rateForSizing.toFixed(2)}%`,
+      );
+    } else {
+      capacityAssumptions.push(
+        "Maximum debt stock requires an interest rate (extracted or assumption).",
+      );
+    }
+    if (tenorForSizing !== null) {
+      capacityAssumptions.push(
+        `Amortising tenor assumption ${tenorForSizing} years`,
+      );
+    } else if (rateForSizing !== null) {
+      capacityAssumptions.push(
+        "No tenor entered — debt stock estimated on an interest-only basis (PMT / rate).",
+      );
+    }
   }
 
   const scenarioTargets: { key: CapacityScenario["key"]; label: string; targetDscr: TargetDscr }[] = [
@@ -414,8 +596,10 @@ export function analyzeDebtSizing(
     { key: "aggressive", label: "Aggressive", targetDscr: 1.25 },
   ];
   const scenarios: CapacityScenario[] = scenarioTargets.map((scenario) => {
-    const service = divide(cads, scenario.targetDscr);
-    const debt = annuityPrincipal(service, rateForSizing, tenorForSizing);
+    const service = canSizeFromTrueDscr ? divide(cads, scenario.targetDscr) : null;
+    const debt = canSizeFromTrueDscr
+      ? annuityPrincipal(service, rateForSizing, tenorForSizing)
+      : null;
     return {
       ...scenario,
       maxDebtService: service,
@@ -423,11 +607,11 @@ export function analyzeDebtSizing(
       existingDebt: totalDebt,
       additionalCapacity:
         debt !== null && totalDebt !== null ? finite(debt - totalDebt) : null,
-      impliedDscr: service !== null ? scenario.targetDscr : null,
+      impliedDscr: canSizeFromTrueDscr ? scenario.targetDscr : null,
     };
   });
 
-  const canStress = cads !== null && debtService !== null;
+  const canStress = dscr !== null && cads !== null && debtService !== null;
   const stressDeclines: StressDeclinePct[] = [0, 10, 20, 30];
   const stressRows: StressRow[] = stressDeclines.map((declinePct) => {
     if (!canStress) {
@@ -464,53 +648,92 @@ export function analyzeDebtSizing(
     stressRows[0]!;
 
   const dscrMetric = metric({
-    label: "DSCR",
+    label: "True DSCR",
     value: dscr,
     unit: "x",
-    source: periodSource,
+    source: dscr !== null ? calculatedSource : periodSource,
     methodology:
       dscr !== null
         ? `${cadsMethod} / (interest + principal)`
-        : "DSCR = cash available for debt service / total debt service",
+        : "True DSCR = cash available for debt service / (interest + principal repayment)",
     requiredHint:
-      dscr === null && principal === null
-        ? "DSCR cannot be calculated because principal repayment/debt-service information is not available."
-        : "Required: CFO (or EBITDA, cash taxes and maintenance capex) and debt-service information (interest and principal).",
+      "True DSCR unavailable. Principal repayment/debt-service schedule is not available in the uploaded data.",
   });
 
   const headlineDebtEquity = metric({
     label: "Debt / Equity",
     value: debtEquity,
     unit: "x",
-    source: periodSource,
-    methodology: extractedDe !== null ? "Extracted D/E" : "Total debt / shareholders' equity",
-    requiredHint: "Requires total debt and shareholders' equity.",
+    source: extractedDe !== null ? extractedSource : calculatedSource,
+    methodology: "Total Debt / Shareholders' Equity",
+    requiredHint: "Requires Total Debt and Shareholders' Equity.",
+    ...deCompare,
   });
   const headlineDebtEbitda = metric({
     label: "Debt / EBITDA",
     value: debtEbitda,
     unit: "x",
-    source: periodSource,
-    methodology: "Total debt / EBITDA",
-    requiredHint: "Requires total debt and EBITDA.",
+    source: calculatedSource,
+    methodology: "Total Debt / EBITDA",
+    requiredHint: "Requires Total Debt and EBITDA.",
   });
   const headlineCoverage = metric({
     label: "Interest Coverage",
     value: interestCoverage,
     unit: "x",
-    source: periodSource,
-    methodology:
-      extractedCoverage !== null ? "Extracted interest coverage" : "EBIT / interest expense",
-    requiredHint: "Requires EBIT and interest expense.",
+    source: extractedCoverage !== null ? extractedSource : calculatedSource,
+    methodology: "EBIT / Interest Expense",
+    requiredHint: "Requires EBIT and Interest Expense.",
+    ...coverageCompare,
   });
 
-  const position: CreditMetric[] = [
+  const leverage: CreditMetric[] = [
     metric({
       label: "Total Debt",
       value: totalDebt,
       source: periodSource,
-      methodology: "Extracted total debt / borrowings, or ST + LT debt, or facility sum",
-      requiredHint: "Requires balance-sheet debt or a debt schedule.",
+      methodology: "Extracted total debt / borrowings, or ST + LT debt",
+      requiredHint: "Requires balance-sheet debt.",
+    }),
+    metric({
+      label: "Shareholders' Equity",
+      value: equity,
+      source: periodSource,
+      methodology: "Extracted shareholders' funds / equity",
+      requiredHint: "Requires shareholders' equity.",
+    }),
+    metric({
+      label: "Cash & Cash Equivalents",
+      value: cash,
+      source: periodSource,
+      methodology: "Extracted cash and cash equivalents",
+      requiredHint: "Requires cash on the balance sheet.",
+    }),
+    metric({
+      label: "Net Debt",
+      value: netDebt,
+      source: extractedNetDebt !== null ? extractedSource : calculatedSource,
+      methodology: "Total Debt − Cash & Cash Equivalents",
+      requiredHint: "Requires Total Debt and Cash.",
+      ...netDebtCompare,
+    }),
+    headlineDebtEquity,
+    headlineDebtEbitda,
+    metric({
+      label: "Net Debt / EBITDA",
+      value: netDebtEbitda,
+      unit: "x",
+      source: calculatedSource,
+      methodology: "Net Debt / EBITDA",
+      requiredHint: "Requires Net Debt and EBITDA.",
+    }),
+    metric({
+      label: "Debt / Assets",
+      value: debtAssets,
+      unit: "x",
+      source: calculatedSource,
+      methodology: "Total Debt / Total Assets",
+      requiredHint: "Requires Total Debt and Total Assets.",
     }),
     metric({
       label: "Short-Term Debt",
@@ -526,43 +749,112 @@ export function analyzeDebtSizing(
       methodology: "Extracted long-term borrowings",
       requiredHint: "Requires long-term borrowings.",
     }),
-    metric({
-      label: "Cash",
-      value: cash,
-      source: periodSource,
-      methodology: "Extracted cash and cash equivalents",
-      requiredHint: "Requires cash on the balance sheet.",
-    }),
-    metric({
-      label: "Net Debt",
-      value: netDebt,
-      source: periodSource,
-      methodology: extractedNetDebt !== null ? "Extracted net debt" : "Total debt − cash",
-      requiredHint: "Requires total debt and cash.",
-    }),
-    headlineDebtEquity,
-    headlineDebtEbitda,
-    metric({
-      label: "Interest Expense",
-      value: interest,
-      source: interestSource,
-      methodology: interestMethod,
-      requiredHint: "Requires finance cost, or EBIT and PBT, or facility interest.",
-    }),
+  ];
+
+  const coverageMetrics: CreditMetric[] = [
     headlineCoverage,
+    metric({
+      label: "CFO / Interest",
+      value: cfoInterest,
+      unit: "x",
+      source: calculatedSource,
+      methodology: "CFO / Interest Expense",
+      requiredHint: "Requires CFO and Interest Expense.",
+    }),
+    metric({
+      label: "FCF / Interest",
+      value: fcfInterest,
+      unit: "x",
+      source: calculatedSource,
+      methodology: "FCF / Interest Expense",
+      requiredHint: "Requires FCF (or CFO and Capex) and Interest Expense.",
+    }),
+  ];
+
+  const cashFlowMetrics: CreditMetric[] = [
+    metric({
+      label: "CFO",
+      value: cfo,
+      source: periodSource,
+      methodology: "Cash from Operating Activities",
+      requiredHint: "Requires Cash Flow screenshot / statement.",
+    }),
+    metric({
+      label: "Capex",
+      value: capex,
+      source: periodSource,
+      methodology: "Capital expenditure",
+      requiredHint: "Requires Capex.",
+    }),
+    metric({
+      label: "CFI",
+      value: investingCf,
+      source: periodSource,
+      methodology: "Cash from Investing Activities",
+      requiredHint: "Requires investing cash flow.",
+    }),
+    metric({
+      label: "CFF",
+      value: financingCf,
+      source: periodSource,
+      methodology: "Cash from Financing Activities",
+      requiredHint: "Requires financing cash flow.",
+    }),
+    metric({
+      label: "FCF",
+      value: fcf,
+      source: fcfCalculated ? calculatedSource : periodSource,
+      methodology: "CFO − Capex",
+      requiredHint: "Requires CFO and Capex.",
+    }),
+    metric({
+      label: "FCF Margin",
+      value: fcfMargin,
+      unit: "%",
+      source: calculatedSource,
+      methodology: "FCF / Revenue",
+      requiredHint: "Requires FCF and Revenue.",
+    }),
+    metric({
+      label: "CFO Margin",
+      value: cfoMargin,
+      unit: "%",
+      source: calculatedSource,
+      methodology: "CFO / Revenue",
+      requiredHint: "Requires CFO and Revenue.",
+    }),
+    metric({
+      label: "CFO / PAT",
+      value: cfoToPat,
+      unit: "x",
+      source: calculatedSource,
+      methodology: "CFO / PAT",
+      requiredHint: "Requires CFO and PAT.",
+    }),
+    metric({
+      label: "FCF / PAT",
+      value: fcfToPat,
+      unit: "x",
+      source: calculatedSource,
+      methodology: "FCF / PAT",
+      requiredHint: "Requires FCF and PAT.",
+    }),
     metric({
       label: "Revenue",
       value: revenue,
       source: periodSource,
-      methodology: "Extracted revenue",
+      methodology: "Extracted revenue / sales",
       requiredHint: "Requires P&L revenue.",
     }),
     metric({
       label: "EBITDA",
       value: ebitda,
       source: periodSource,
-      methodology: "Extracted EBITDA",
-      requiredHint: "Requires EBITDA.",
+      methodology:
+        latest?.incomeStatement.ebitda !== null
+          ? "Extracted EBITDA"
+          : "EBIT + Depreciation",
+      requiredHint: "Requires EBITDA, or EBIT and depreciation.",
     }),
     metric({
       label: "EBIT",
@@ -575,33 +867,28 @@ export function analyzeDebtSizing(
       label: "Operating margin",
       value: operatingMargin,
       unit: "%",
-      source: periodSource,
+      source: extractedOpm !== null ? extractedSource : calculatedSource,
       methodology: opmMethod,
       requiredHint: "Requires operating profit or EBITDA, and revenue.",
     }),
     metric({
-      label: "Operating Cash Flow",
-      value: cfo,
-      source: periodSource,
-      methodology: "Extracted CFO",
-      requiredHint: "Requires cash-flow statement.",
-    }),
-    metric({
-      label: "Free Cash Flow",
-      value: fcf,
-      source: periodSource,
-      methodology: "Extracted FCF",
-      requiredHint: "Requires free cash flow or CFO and capex.",
+      label: "Interest Expense",
+      value: interest,
+      source: interestSource,
+      methodology: interestMethod,
+      requiredHint: "Requires finance cost, or EBIT and PBT.",
     }),
   ];
 
+  const position = [...leverage, ...coverageMetrics, ...cashFlowMetrics];
+
   const cadsMetric = metric({
     label: "Cash Available for Debt Service",
-    value: cads,
+    value: canSizeFromTrueDscr ? cads : null,
     source: periodSource,
     methodology: cadsMethod,
     requiredHint:
-      "Required: operating cash flow, or EBITDA plus cash taxes and maintenance capex. EBITDA alone is not used as CADS.",
+      "True DSCR CADS is only applied when principal repayment exists. CFO and FCF coverage are shown separately and are not DSCR.",
   });
   const interestMetric = metric({
     label: "Interest",
@@ -616,22 +903,30 @@ export function analyzeDebtSizing(
     source: principalSource,
     methodology: principalMethod,
     requiredHint:
-      "Requires extracted principal repayment or a user assumption. Not invented.",
+      "True DSCR requires principal repayment/debt-service schedule. Outstanding debt is not used as principal.",
   });
   const debtServiceMetric = metric({
     label: "Total Debt Service",
     value: debtService,
     source: periodSource,
     methodology: "Interest + principal repayment",
-    requiredHint: "Requires both interest and principal (extracted or assumed).",
+    requiredHint: "Requires both interest and principal repayment.",
   });
   const cashInterestMetric = metric({
-    label: "Cash / Interest (not DSCR)",
-    value: cashInterestCover,
+    label: "CFO / Interest",
+    value: cfoInterest,
     unit: "x",
-    source: periodSource,
-    methodology: "CADS / interest — shown only when principal is missing; this is not DSCR",
-    requiredHint: "Requires CADS and interest.",
+    source: calculatedSource,
+    methodology: "CFO / Interest Expense — coverage indicator, not DSCR",
+    requiredHint: "Requires CFO and Interest Expense.",
+  });
+  const fcfInterestMetric = metric({
+    label: "FCF / Interest",
+    value: fcfInterest,
+    unit: "x",
+    source: calculatedSource,
+    methodology: "FCF / Interest Expense — coverage indicator, not DSCR",
+    requiredHint: "Requires FCF (or CFO and Capex) and Interest Expense.",
   });
 
   const scoreComponents: ScoreComponent[] = [];
@@ -643,12 +938,21 @@ export function analyzeDebtSizing(
       max: 20,
       detail: `DSCR ${dscr.toFixed(2)}x`,
     });
+  } else if (cfoInterest !== null) {
+    const points =
+      cfoInterest >= 8 ? 20 : cfoInterest >= 4 ? 16 : cfoInterest >= 2 ? 10 : 4;
+    scoreComponents.push({
+      label: "CFO / Interest",
+      score: points,
+      max: 20,
+      detail: `CFO/Interest ${cfoInterest.toFixed(2)}x (coverage indicator, not DSCR)`,
+    });
   } else {
     scoreComponents.push({
-      label: "DSCR",
+      label: "True DSCR",
       score: null,
       max: 20,
-      detail: "DSCR unavailable",
+      detail: "True DSCR unavailable — principal repayment not in uploaded data",
     });
   }
   if (debtEquity !== null) {
@@ -792,6 +1096,17 @@ export function analyzeDebtSizing(
   if (interestCoverage !== null) {
     explanationParts.push(`interest coverage is ${interestCoverage.toFixed(1)}x`);
   }
+  if (cfoInterest !== null) {
+    explanationParts.push(`CFO/Interest coverage is ${cfoInterest.toFixed(1)}x`);
+  }
+  if (fcfInterest !== null) {
+    explanationParts.push(`FCF/Interest coverage is ${fcfInterest.toFixed(1)}x`);
+  }
+  if (dscr === null) {
+    explanationParts.push(
+      "true DSCR is unavailable because principal repayment is not in the uploaded data",
+    );
+  }
   const lendingExplanation =
     explanationParts.length > 0
       ? `${explanationParts.join(", ")}.`
@@ -824,11 +1139,18 @@ export function analyzeDebtSizing(
       interestCoverage: headlineCoverage,
     },
     dscrBand: dscrBand(dscr),
+    trueDscrUnavailableReason,
+    leverage,
+    coverageMetrics,
+    cashFlowMetrics,
     cads: cadsMetric,
     interest: interestMetric,
     principal: principalMetric,
     debtService: debtServiceMetric,
     cashInterestCover: cashInterestMetric,
+    fcfInterest: fcfInterestMetric,
+    periodOptions,
+    selectedPeriodKey: latest ? periodIdentityKey(latest) : null,
     facilities,
     capacity: {
       existingDebt: metric({
@@ -849,7 +1171,7 @@ export function analyzeDebtSizing(
             ? "Annuity: (CADS / target DSCR) × amortisation factor"
             : "Interest-only: (CADS / target DSCR) / interest rate",
         requiredHint:
-          "Requires CADS plus an interest rate (extracted or assumption).",
+          "True DSCR-based capacity requires principal repayment. Target Debt/EBITDA has not been assumed.",
       }),
       additionalCapacity: metric({
         label: "Additional Debt Capacity",
@@ -863,7 +1185,7 @@ export function analyzeDebtSizing(
         value: maxDebtService,
         source: periodSource,
         methodology: "CADS / target DSCR",
-        requiredHint: "Requires cash available for debt service.",
+        requiredHint: "Requires cash available for debt service and true DSCR inputs.",
       }),
       targetDscr: options.targetDscr,
       assumptionsUsed: capacityAssumptions,
@@ -873,7 +1195,7 @@ export function analyzeDebtSizing(
       available: canStress,
       unavailableReason: canStress
         ? null
-        : "Stress test unavailable — insufficient cash-flow/debt-service data.",
+        : "True DSCR stress test requires principal repayment. CFO/Interest and FCF/Interest are coverage indicators, not DSCR.",
       rows: stressRows,
       selected: selectedStress,
     },

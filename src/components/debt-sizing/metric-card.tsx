@@ -20,6 +20,17 @@ export function CreditMetricCard({ metric }: { metric: CreditMetric }) {
       {!metric.available && metric.requiredHint && (
         <p className="mt-1 text-[11px] text-amber-400/80">{metric.requiredHint}</p>
       )}
+      {metric.validationNote && (
+        <p
+          className={`mt-1 text-[11px] ${
+            metric.validation === "validated"
+              ? "text-emerald-400/90"
+              : "text-amber-300/90"
+          }`}
+        >
+          {metric.validationNote}
+        </p>
+      )}
       <p className="mt-2 text-[11px] text-slate-500">Source: {metric.source}</p>
       <p className="text-[11px] text-slate-600">Method: {metric.methodology}</p>
     </div>

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useFinancialSession } from "@/context/financial-session-context";
 import {
   analyzeDebtSizing,
+  listCreditPeriods,
   type DebtSizingOptions,
   type StressDeclinePct,
   type TargetDscr,
@@ -41,6 +42,12 @@ export function DebtSizingView() {
   const [assumedRate, setAssumedRate] = useState("");
   const [assumedTenor, setAssumedTenor] = useState("");
   const [assumedPrincipal, setAssumedPrincipal] = useState("");
+  const [periodKey, setPeriodKey] = useState("");
+
+  const periodOptions = useMemo(
+    () => listCreditPeriods(financialData),
+    [financialData],
+  );
 
   const options: DebtSizingOptions = useMemo(
     () => ({
@@ -49,8 +56,9 @@ export function DebtSizingView() {
       assumedInterestRatePct: parseOptionalNumber(assumedRate),
       assumedTenorYears: parseOptionalNumber(assumedTenor),
       assumedPrincipal: parseOptionalNumber(assumedPrincipal),
+      periodKey: periodKey || null,
     }),
-    [targetDscr, stressDeclinePct, assumedRate, assumedTenor, assumedPrincipal],
+    [targetDscr, stressDeclinePct, assumedRate, assumedTenor, assumedPrincipal, periodKey],
   );
 
   const analysis = useMemo(
@@ -85,6 +93,22 @@ export function DebtSizingView() {
           Credit analysis from processed documents
           {analysis.latestPeriodLabel ? ` · ${analysis.latestPeriodLabel}` : ""}
         </p>
+        {periodOptions.length > 1 && (
+          <label className="mt-4 block max-w-xs text-xs text-slate-500">
+            Period
+            <select
+              value={periodKey || analysis.selectedPeriodKey || ""}
+              onChange={(event) => setPeriodKey(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+            >
+              {periodOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </section>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -97,12 +121,17 @@ export function DebtSizingView() {
               dscrAvailable ? "text-white" : "text-slate-500"
             }`}
           >
-            {dscrAvailable ? analysis.headline.dscr.formatted : "DSCR unavailable"}
+            {dscrAvailable ? analysis.headline.dscr.formatted : "True DSCR unavailable"}
           </p>
-          <p className="mt-2 text-sm text-slate-300">{analysis.dscrBand}</p>
+          <p className="mt-2 text-sm text-slate-300">
+            {dscrAvailable
+              ? analysis.dscrBand
+              : "Coverage uses CFO/Interest and FCF/Interest, not DSCR."}
+          </p>
           {!dscrAvailable && (
             <p className="mt-2 text-xs text-amber-300/80">
-              Required: CFO/FCF and debt-service information.
+              {analysis.trueDscrUnavailableReason ??
+                "Principal repayment/debt-service schedule is not available in the uploaded data."}
             </p>
           )}
           <p className="mt-3 text-[11px] text-slate-500">
@@ -119,10 +148,35 @@ export function DebtSizingView() {
 
       <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-          Debt Position
+          Debt &amp; Leverage
         </h3>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {analysis.position.map((item) => (
+          {analysis.leverage.map((item) => (
+            <CreditMetricCard key={item.label} metric={item} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
+          Coverage
+        </h3>
+        <p className="mt-2 text-xs text-slate-500">
+          Interest, CFO, and FCF coverage. These are not true DSCR.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {analysis.coverageMetrics.map((item) => (
+            <CreditMetricCard key={item.label} metric={item} />
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
+          Cash Flow
+        </h3>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {analysis.cashFlowMetrics.map((item) => (
             <CreditMetricCard key={item.label} metric={item} />
           ))}
         </div>
@@ -134,7 +188,7 @@ export function DebtSizingView() {
         </h3>
         {analysis.facilities.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">
-            Data unavailable. Requires a debt schedule (lender, outstanding,
+            Insufficient data. Requires a debt schedule (lender, outstanding,
             rate, maturity, or repayments) in the uploaded documents.
           </p>
         ) : (
@@ -171,27 +225,27 @@ export function DebtSizingView() {
                         {facility.facility ?? "Facility"}
                       </td>
                       <td className="px-2 py-2 text-slate-400">
-                        {facility.openingDebt ?? "Data unavailable"}
+                        {facility.openingDebt ?? "Insufficient data"}
                       </td>
                       <td className="px-2 py-2 text-slate-300">
-                        {facility.outstanding ?? "Data unavailable"}
+                        {facility.outstanding ?? "Insufficient data"}
                       </td>
                       <td className="px-2 py-2 text-slate-400">
                         {facility.interestRatePct !== null
                           ? `${facility.interestRatePct}%`
-                          : "Data unavailable"}
+                          : "Insufficient data"}
                       </td>
                       <td className="px-2 py-2 text-slate-400">
-                        {facility.maturity ?? "Data unavailable"}
+                        {facility.maturity ?? "Insufficient data"}
                       </td>
                       <td className="px-2 py-2 text-slate-400">
-                        {facility.annualPrincipal ?? "Data unavailable"}
+                        {facility.annualPrincipal ?? "Insufficient data"}
                       </td>
                       <td className="px-2 py-2 text-slate-400">
-                        {facility.annualInterest ?? "Data unavailable"}
+                        {facility.annualInterest ?? "Insufficient data"}
                       </td>
                       <td className="px-2 py-2 text-slate-300">
-                        {service ?? "Data unavailable"}
+                        {service ?? "Insufficient data"}
                       </td>
                     </tr>
                   );
@@ -204,17 +258,21 @@ export function DebtSizingView() {
 
       <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-          DSCR Analysis
+          True DSCR
         </h3>
+        {!dscrAvailable && analysis.trueDscrUnavailableReason && (
+          <p className="mt-2 text-sm text-amber-300/80">
+            True DSCR unavailable. {analysis.trueDscrUnavailableReason}
+          </p>
+        )}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <CreditMetricCard metric={analysis.cads} />
           <CreditMetricCard metric={analysis.interest} />
           <CreditMetricCard metric={analysis.principal} />
           <CreditMetricCard metric={analysis.debtService} />
           <CreditMetricCard metric={analysis.headline.dscr} />
-          {!analysis.principal.available && (
-            <CreditMetricCard metric={analysis.cashInterestCover} />
-          )}
+          <CreditMetricCard metric={analysis.cashInterestCover} />
+          <CreditMetricCard metric={analysis.fcfInterest} />
         </div>
       </section>
 
@@ -305,7 +363,7 @@ export function DebtSizingView() {
               <p className="mt-3 text-xs text-slate-500">Maximum Debt Capacity</p>
               <p className="text-lg font-semibold text-white">
                 {scenario.maxDebt === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : scenario.maxDebt.toLocaleString(undefined, {
                       maximumFractionDigits: 2,
                     })}
@@ -313,7 +371,7 @@ export function DebtSizingView() {
               <p className="mt-2 text-xs text-slate-500">Existing Debt</p>
               <p className="text-sm text-slate-300">
                 {scenario.existingDebt === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : scenario.existingDebt.toLocaleString(undefined, {
                       maximumFractionDigits: 2,
                     })}
@@ -321,7 +379,7 @@ export function DebtSizingView() {
               <p className="mt-2 text-xs text-slate-500">Additional Borrowing Capacity</p>
               <p className="text-sm text-slate-300">
                 {scenario.additionalCapacity === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : scenario.additionalCapacity.toLocaleString(undefined, {
                       maximumFractionDigits: 2,
                     })}
@@ -329,7 +387,7 @@ export function DebtSizingView() {
               <p className="mt-2 text-xs text-slate-500">DSCR at capacity</p>
               <p className="text-sm text-slate-300">
                 {scenario.impliedDscr === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : `${scenario.impliedDscr.toFixed(2)}x`}
               </p>
             </div>
@@ -367,7 +425,7 @@ export function DebtSizingView() {
               <p className="text-xs text-slate-500">Stressed EBITDA</p>
               <p className="mt-1 text-lg font-semibold text-white">
                 {analysis.stress.selected.ebitda === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : analysis.stress.selected.ebitda.toLocaleString(undefined, {
                       maximumFractionDigits: 2,
                     })}
@@ -377,7 +435,7 @@ export function DebtSizingView() {
               <p className="text-xs text-slate-500">Stressed CADS</p>
               <p className="mt-1 text-lg font-semibold text-white">
                 {analysis.stress.selected.cads === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : analysis.stress.selected.cads.toLocaleString(undefined, {
                       maximumFractionDigits: 2,
                     })}
@@ -387,7 +445,7 @@ export function DebtSizingView() {
               <p className="text-xs text-slate-500">Stressed DSCR</p>
               <p className="mt-1 text-lg font-semibold text-white">
                 {analysis.stress.selected.dscr === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : `${analysis.stress.selected.dscr.toFixed(2)}x`}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
@@ -403,7 +461,7 @@ export function DebtSizingView() {
               <p className="text-xs text-slate-500">Surplus / deficit</p>
               <p className="mt-1 text-lg font-semibold text-white">
                 {analysis.stress.selected.surplus === null
-                  ? "Data unavailable"
+                  ? "Insufficient data"
                   : analysis.stress.selected.surplus.toLocaleString(undefined, {
                       maximumFractionDigits: 2,
                     })}
@@ -461,7 +519,7 @@ export function DebtSizingView() {
             <p className="text-xs text-slate-500">Credit Strength Score</p>
             <p className="mt-2 text-3xl font-bold text-white">
               {analysis.score.value === null
-                ? "Data unavailable"
+                ? "Insufficient data"
                 : `${analysis.score.value}/100`}
             </p>
             <p className={`mt-2 text-sm font-semibold ${GRADE_STYLES[analysis.score.grade]}`}>
@@ -476,7 +534,7 @@ export function DebtSizingView() {
                 <li key={item.label} className="text-sm text-slate-400">
                   <span className="text-slate-300">{item.label}:</span>{" "}
                   {item.score === null
-                    ? "Data unavailable"
+                    ? "Insufficient data"
                     : `${item.score}/${item.max}`}{" "}
                   · {item.detail}
                 </li>
