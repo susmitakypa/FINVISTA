@@ -336,6 +336,21 @@ export function analyzeDebtSizing(
   const currentLiabilities = latest?.balanceSheet.currentLiabilities ?? null;
   const currentRatio = divide(currentAssets, currentLiabilities);
   const fcf = latest?.cashFlow.freeCashFlow ?? null;
+  const extractedOpm = latest?.ratios.operatingMargin ?? null;
+  let operatingMargin: FinancialValue = extractedOpm;
+  let opmMethod = "Extracted operating / EBITDA margin";
+  if (operatingMargin === null && ebit !== null && revenue !== null && revenue !== 0) {
+    operatingMargin = finite((ebit / revenue) * 100);
+    opmMethod = "EBIT / revenue";
+  } else if (
+    operatingMargin === null &&
+    ebitda !== null &&
+    revenue !== null &&
+    revenue !== 0
+  ) {
+    operatingMargin = finite((ebitda / revenue) * 100);
+    opmMethod = "EBITDA / revenue";
+  }
 
   const facilityRate = (() => {
     const rates = facilities
@@ -537,6 +552,14 @@ export function analyzeDebtSizing(
       source: periodSource,
       methodology: "Extracted EBIT / operating profit",
       requiredHint: "Requires EBIT.",
+    }),
+    metric({
+      label: "Operating margin",
+      value: operatingMargin,
+      unit: "%",
+      source: periodSource,
+      methodology: opmMethod,
+      requiredHint: "Requires operating profit or EBITDA, and revenue.",
     }),
     metric({
       label: "Operating Cash Flow",
