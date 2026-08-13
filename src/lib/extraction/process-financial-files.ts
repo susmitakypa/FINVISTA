@@ -142,7 +142,7 @@ function coverageFromFiles(sourceFiles: ProcessedFileRecord[]): DocumentCoverage
 export async function processFinancialFiles(
   files: ProcessInput[],
 ): Promise<NormalizedFinancialData> {
-  let company: string | null = null;
+  const companyNames: string[] = [];
   let periods: PeriodFinancialData[] = [];
   const marketData = createEmptyMarketData();
   let qualitative: QualitativeInsights = createEmptyQualitative();
@@ -195,7 +195,7 @@ export async function processFinancialFiles(
       const market = parseMarketData(extraction.text);
       const incomingQualitative = parseQualitativeText(extraction.text);
 
-      if (parsed.company && !company) company = parsed.company;
+      if (parsed.company) companyNames.push(parsed.company);
 
       const ocrHints = /cash\s+fr[o0mn]{0,3}\s+operat|operating cash flow|\bcfo\b|capex|capital exp/i.test(
         extraction.text,
@@ -374,6 +374,8 @@ export async function processFinancialFiles(
     (file) => file.status === "review" || file.status === "partial",
   ).length;
 
+  const company = reconcileCompanyNames(companyNames);
+
   const data: NormalizedFinancialData = {
     company,
     currency: null,
@@ -405,6 +407,27 @@ export async function processFinancialFiles(
   });
 
   return data;
+}
+
+function reconcileCompanyNames(names: string[]): string | null {
+  const cleaned = names
+    .map((name) => name.trim())
+    .filter((name) => name.length >= 2 && name.length <= 120);
+  if (cleaned.length === 0) return null;
+  const counts = new Map<string, { display: string; count: number }>();
+  for (const name of cleaned) {
+    const key = name.toLowerCase();
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(key, { display: name, count: 1 });
+    }
+  }
+  return [...counts.values()].sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return b.display.length - a.display.length;
+  })[0]!.display;
 }
 
 export function filesToProcessInput(
