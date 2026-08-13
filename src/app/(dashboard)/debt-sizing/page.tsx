@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/dashboard/coming-soon";
+import { DebtSizingView } from "@/components/debt-sizing/debt-sizing-view";
 
 export default function DebtSizingPage() {
-  return <ComingSoon moduleName="Debt Sizing & DSCR" />;
+  return <DebtSizingView />;
 }

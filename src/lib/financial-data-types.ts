@@ -19,6 +19,7 @@ export type IncomeStatement = {
   profitBeforeTax: FinancialValue;
   netProfit: FinancialValue;
   eps: FinancialValue;
+  interestExpense: FinancialValue;
 };
 
 export type BalanceSheet = {
@@ -32,6 +33,8 @@ export type BalanceSheet = {
   payables: FinancialValue;
   currentAssets: FinancialValue;
   currentLiabilities: FinancialValue;
+  shortTermDebt: FinancialValue;
+  longTermDebt: FinancialValue;
 };
 
 export type CashFlow = {
@@ -40,6 +43,9 @@ export type CashFlow = {
   freeCashFlow: FinancialValue;
   financingCashFlow: FinancialValue;
   investingCashFlow: FinancialValue;
+  principalRepayment: FinancialValue;
+  cashTaxes: FinancialValue;
+  maintenanceCapex: FinancialValue;
 };
 
 export type FinancialRatios = {
@@ -61,6 +67,19 @@ export type PeriodFinancialData = {
   balanceSheet: BalanceSheet;
   cashFlow: CashFlow;
   ratios: FinancialRatios;
+};
+
+export type DebtFacility = {
+  lender: string | null;
+  facility: string | null;
+  openingDebt: FinancialValue;
+  outstanding: FinancialValue;
+  interestRatePct: FinancialValue;
+  maturity: string | null;
+  maturityYear: number | null;
+  annualPrincipal: FinancialValue;
+  annualInterest: FinancialValue;
+  source: UploadCategory | "unknown";
 };
 
 export type FileProcessingStatus =
@@ -123,6 +142,7 @@ export type NormalizedFinancialData = {
   marketData: MarketData;
   qualitative: QualitativeInsights;
   documentCoverage: DocumentCoverage;
+  debtFacilities: DebtFacility[];
   sourceFiles: ProcessedFileRecord[];
   summary: ProcessingSummary;
 };
@@ -135,6 +155,7 @@ export function createEmptyIncomeStatement(): IncomeStatement {
     profitBeforeTax: null,
     netProfit: null,
     eps: null,
+    interestExpense: null,
   };
 }
 
@@ -150,6 +171,8 @@ export function createEmptyBalanceSheet(): BalanceSheet {
     payables: null,
     currentAssets: null,
     currentLiabilities: null,
+    shortTermDebt: null,
+    longTermDebt: null,
   };
 }
 
@@ -160,6 +183,9 @@ export function createEmptyCashFlow(): CashFlow {
     freeCashFlow: null,
     financingCashFlow: null,
     investingCashFlow: null,
+    principalRepayment: null,
+    cashTaxes: null,
+    maintenanceCapex: null,
   };
 }
 
@@ -317,6 +343,7 @@ export function hydrateNormalizedData(
       ...createEmptyDocumentCoverage(),
       ...raw.documentCoverage,
     },
+    debtFacilities: raw.debtFacilities ?? [],
     sourceFiles: raw.sourceFiles ?? [],
     summary: raw.summary ?? {
       filesProcessed: 0,

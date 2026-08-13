@@ -1,4 +1,5 @@
 import type {
+  DebtFacility,
   DocumentCoverage,
   NormalizedFinancialData,
   PeriodFinancialData,
@@ -21,6 +22,7 @@ import {
   parseMarketData,
 } from "./financial-parser";
 import { mergeQualitative, parseQualitativeText } from "./qualitative-parser";
+import { mergeDebtFacilities, parseDebtFacilities } from "./debt-parser";
 
 type ProcessInput = {
   id: string;
@@ -133,6 +135,7 @@ export async function processFinancialFiles(
   let periods: PeriodFinancialData[] = [];
   const marketData = createEmptyMarketData();
   let qualitative: QualitativeInsights = createEmptyQualitative();
+  let debtFacilities: DebtFacility[] = [];
   const sourceFiles: ProcessedFileRecord[] = [];
   const ranks = new Map<string, number>();
 
@@ -173,6 +176,10 @@ export async function processFinancialFiles(
         qualitative,
         incomingQualitative,
         category === "investor-presentation" || category === "annual-report",
+      );
+      debtFacilities = mergeDebtFacilities(
+        debtFacilities,
+        parseDebtFacilities(extraction.text, category),
       );
 
       const latestPeriod =
@@ -239,6 +246,7 @@ export async function processFinancialFiles(
     marketData,
     qualitative,
     documentCoverage: coverageFromFiles(sourceFiles),
+    debtFacilities,
     sourceFiles,
     summary: {
       filesProcessed: sourceFiles.length,

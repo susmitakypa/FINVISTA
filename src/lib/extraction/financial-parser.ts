@@ -149,6 +149,7 @@ const INCOME_PATTERNS: FieldPattern[] = [
   { key: "profitBeforeTax", labels: [/profit before tax/i, /\bpbt\b/i, /profit before taxation/i] },
   { key: "netProfit", labels: [/profit after tax/i, /net profit/i, /\bpat\b/i, /net income/i] },
   { key: "eps", labels: [/\beps\b/i, /earnings per share/i] },
+  { key: "interestExpense", labels: [/finance costs?/i, /interest expense/i, /interest paid/i, /finance charges?/i] },
 ];
 
 const BALANCE_PATTERNS: FieldPattern[] = [
@@ -162,6 +163,8 @@ const BALANCE_PATTERNS: FieldPattern[] = [
   { key: "payables", labels: [/trade payables/i, /payables/i] },
   { key: "currentAssets", labels: [/current assets/i, /total current assets/i] },
   { key: "currentLiabilities", labels: [/current liabilities/i, /total current liabilities/i] },
+  { key: "shortTermDebt", labels: [/short[- ]term (?:debt|borrowings)/i, /current borrowings/i, /current portion of (?:long[- ]term )?(?:debt|borrowings)/i] },
+  { key: "longTermDebt", labels: [/long[- ]term (?:debt|borrowings)/i, /non[- ]current borrowings/i] },
 ];
 
 const CASHFLOW_PATTERNS: FieldPattern[] = [
@@ -170,6 +173,9 @@ const CASHFLOW_PATTERNS: FieldPattern[] = [
   { key: "freeCashFlow", labels: [/free cash flow/i, /\bfcf\b/i] },
   { key: "financingCashFlow", labels: [/cash from financing/i, /financing cash flow/i, /net cash from financing/i] },
   { key: "investingCashFlow", labels: [/cash from investing/i, /investing cash flow/i, /net cash from investing/i] },
+  { key: "principalRepayment", labels: [/repayment of (?:borrowings|debt|loans?)/i, /principal repayment/i, /debt repaid/i] },
+  { key: "cashTaxes", labels: [/taxes? paid/i, /income tax paid/i, /direct taxes? paid/i] },
+  { key: "maintenanceCapex", labels: [/maintenance capex/i, /maintenance capital expenditure/i] },
 ];
 
 const RATIO_PATTERNS: FieldPattern[] = [
@@ -242,6 +248,7 @@ export function parseFinancialText(text: string) {
       profitBeforeTax: null,
       netProfit: null,
       eps: null,
+      interestExpense: null,
     },
     lines,
     INCOME_PATTERNS,
@@ -259,6 +266,8 @@ export function parseFinancialText(text: string) {
       payables: null,
       currentAssets: null,
       currentLiabilities: null,
+      shortTermDebt: null,
+      longTermDebt: null,
     },
     lines,
     BALANCE_PATTERNS,
@@ -271,6 +280,9 @@ export function parseFinancialText(text: string) {
       freeCashFlow: null,
       financingCashFlow: null,
       investingCashFlow: null,
+      principalRepayment: null,
+      cashTaxes: null,
+      maintenanceCapex: null,
     },
     lines,
     CASHFLOW_PATTERNS,
