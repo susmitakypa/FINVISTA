@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/dashboard/coming-soon";
+import { LongTermInvestmentView } from "@/components/long-term/long-term-investment-view";
 
 export default function LongTermInvestmentPage() {
-  return <ComingSoon moduleName="Long-Term Investment" />;
+  return <LongTermInvestmentView />;
 }
