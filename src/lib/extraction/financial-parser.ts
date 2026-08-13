@@ -213,15 +213,19 @@ function extractFieldValueFromLines(
   if (!line || !lineMatchesLabel(line, pattern.labels)) return null;
 
   const sameLine = pickNumericValue(line, pattern);
-  if (sameLine !== null) return sameLine;
+  if (sameLine !== null) {
+    return pattern.key === "capitalExpenditure" ? Math.abs(sameLine) : sameLine;
+  }
 
-  for (const offset of [1, 2]) {
+  for (const offset of [1, 2, 3]) {
     const next = lines[index + offset];
     if (!next) continue;
     if (looksLikePeriodHeader(next)) continue;
     if (allPatterns.some((item) => lineMatchesLabel(next, item.labels))) continue;
     const value = pickNumericValue(next, pattern);
-    if (value !== null) return value;
+    if (value !== null) {
+      return pattern.key === "capitalExpenditure" ? Math.abs(value) : value;
+    }
   }
 
   return null;

@@ -180,6 +180,62 @@ export function ProcessingSummaryCard({ data }: ProcessingSummaryProps) {
           ))}
         </ul>
       )}
+      {extractionValidation?.cashFlowDebug && (
+        <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/[0.04] p-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300/90">
+            Extracted cash flow data (debug)
+          </h4>
+          <dl className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+            <div>
+              CFO:{" "}
+              {extractionValidation.cashFlowDebug.cfo === null
+                ? "NOT FOUND"
+                : extractionValidation.cashFlowDebug.cfo}
+            </div>
+            <div>
+              Capex:{" "}
+              {extractionValidation.cashFlowDebug.capex === null
+                ? "NOT FOUND"
+                : extractionValidation.cashFlowDebug.capex}
+            </div>
+            <div>
+              FCF:{" "}
+              {extractionValidation.cashFlowDebug.fcf === null
+                ? "NOT CALCULATED"
+                : extractionValidation.cashFlowDebug.fcf}
+            </div>
+            <div>
+              CFO source: {extractionValidation.cashFlowDebug.cfoSource ?? "—"}
+            </div>
+            <div>
+              Capex source: {extractionValidation.cashFlowDebug.capexSource ?? "—"}
+            </div>
+            <div>
+              Periods:{" "}
+              {extractionValidation.cashFlowDebug.periods.length > 0
+                ? extractionValidation.cashFlowDebug.periods.join(", ")
+                : "none"}
+            </div>
+            <div>
+              Raw OCR detected:{" "}
+              {extractionValidation.cashFlowDebug.ocrDetected ? "yes" : "no"}
+            </div>
+            <div>
+              Parser detected:{" "}
+              {extractionValidation.cashFlowDebug.parserDetected ? "yes" : "no"}
+            </div>
+            <div>
+              Normalized dataset detected:{" "}
+              {extractionValidation.cashFlowDebug.normalizedDetected ? "yes" : "no"}
+            </div>
+          </dl>
+          {extractionValidation.cashFlowDebug.ocrPreview && (
+            <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-[10px] text-slate-500">
+              {extractionValidation.cashFlowDebug.ocrPreview}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }

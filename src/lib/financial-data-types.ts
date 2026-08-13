@@ -45,6 +45,20 @@ export type ExtractionValidation = {
   averageConfidence: number | null;
   missingInputs: string[];
   validations: RatioValidation[];
+  cashFlowDebug: CashFlowDebug | null;
+};
+
+export type CashFlowDebug = {
+  ocrDetected: boolean;
+  parserDetected: boolean;
+  normalizedDetected: boolean;
+  cfo: number | null;
+  capex: number | null;
+  fcf: number | null;
+  cfoSource: string | null;
+  capexSource: string | null;
+  periods: string[];
+  ocrPreview: string;
 };
 
 export type MarketData = {

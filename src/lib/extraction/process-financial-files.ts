@@ -151,6 +151,9 @@ export async function processFinancialFiles(
   const ranks = new Map<string, number>();
   const observations: FinancialObservation[] = [];
   let screenshotsProcessed = 0;
+  let cashFlowOcrDetected = false;
+  let cashFlowParserDetected = false;
+  let cashFlowOcrPreview = "";
 
   for (const { id, file, category } of files) {
     try {
@@ -194,28 +197,83 @@ export async function processFinancialFiles(
 
       if (parsed.company && !company) company = parsed.company;
 
+      const ocrHints = /cash\s+fr[o0mn]{0,3}\s+operat|operating cash flow|\bcfo\b|capex|capital exp/i.test(
+        extraction.text,
+      );
+      if (ocrHints) {
+        cashFlowOcrDetected = true;
+        if (!cashFlowOcrPreview) cashFlowOcrPreview = extraction.text.slice(0, 800);
+      }
+      const tableCfo = table.observations.some((item) => item.metric === "cfo");
+      const tableCapex = table.observations.some((item) => item.metric === "capex");
+      if (
+        tableCfo ||
+        tableCapex ||
+        parsed.cashFlow.operatingCashFlow !== null ||
+        parsed.cashFlow.capitalExpenditure !== null
+      ) {
+        cashFlowParserDetected = true;
+      }
+      if (typeof console !== "undefined") {
+        console.info("[FINVISTA CF] OCR", {
+          file: file.name,
+          section: table.section,
+          ocrLength: extraction.text.length,
+          ocrHints,
+          tableColumns: table.columns.map((column) => column.period),
+          tableCfo: table.observations.filter((item) => item.metric === "cfo").length,
+          tableCapex: table.observations.filter((item) => item.metric === "capex").length,
+          preview: extraction.text.slice(0, 400),
+        });
+      }
+
       let fileFieldCount = 0;
+      const tableKindRank = sourceRank(category, tableKind);
       if (table.periods.length > 0) {
-        const rank = sourceRank(category, tableKind);
         for (const period of table.periods) {
-          periods = mergeParsedPeriod(periods, period, rank, ranks);
+          periods = mergeParsedPeriod(periods, period, tableKindRank, ranks);
           fileFieldCount += countExtractedFields(period);
         }
         observations.push(...table.observations);
-      } else {
-        const fallbackKind = sourceKind(category, false, false);
-        const rank = sourceRank(category, fallbackKind);
-        const fallbackPeriod = createEmptyPeriod(
-          parsed.period,
-          parsed.year,
-          parsed.periodType,
+      }
+
+      const fallbackKind = sourceKind(category, false, false);
+      const fallbackPeriod = createEmptyPeriod(
+        parsed.period,
+        parsed.year,
+        parsed.periodType,
+      );
+      fallbackPeriod.incomeStatement = parsed.incomeStatement;
+      fallbackPeriod.balanceSheet = parsed.balanceSheet;
+      fallbackPeriod.cashFlow = parsed.cashFlow;
+      fallbackPeriod.ratios = parsed.ratios;
+      const fallbackHasFields = countExtractedFields(fallbackPeriod) > 0;
+      if (fallbackHasFields) {
+        periods = mergeParsedPeriod(
+          periods,
+          fallbackPeriod,
+          table.periods.length > 0 ? 0 : sourceRank(category, fallbackKind),
+          ranks,
         );
-        fallbackPeriod.incomeStatement = parsed.incomeStatement;
-        fallbackPeriod.balanceSheet = parsed.balanceSheet;
-        fallbackPeriod.cashFlow = parsed.cashFlow;
-        fallbackPeriod.ratios = parsed.ratios;
-        periods = mergeParsedPeriod(periods, fallbackPeriod, rank, ranks);
-        fileFieldCount = countExtractedFields(fallbackPeriod);
+        if (table.periods.length === 0) {
+          fileFieldCount = countExtractedFields(fallbackPeriod);
+        }
+      }
+
+      if (typeof console !== "undefined") {
+        const cfoPeriods = periods.filter(
+          (period) => period.cashFlow.operatingCashFlow !== null,
+        );
+        console.info("[FINVISTA CF] parsed", {
+          file: file.name,
+          lineParserCfo: parsed.cashFlow.operatingCashFlow,
+          lineParserCapex: parsed.cashFlow.capitalExpenditure,
+          mergedCfoPeriods: cfoPeriods.map((period) => ({
+            period: period.period,
+            cfo: period.cashFlow.operatingCashFlow,
+            capex: period.cashFlow.capitalExpenditure,
+          })),
+        });
       }
 
       if (chartObs.length > 0) {
@@ -341,6 +399,9 @@ export async function processFinancialFiles(
     observations,
     screenshotsProcessed,
     calculatedCount: enriched.calculated.length,
+    cashFlowOcrDetected,
+    cashFlowParserDetected,
+    cashFlowOcrPreview,
   });
 
   return data;

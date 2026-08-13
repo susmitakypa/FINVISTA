@@ -1,4 +1,5 @@
 import type {
+  CashFlowDebug,
   ExtractionValidation,
   FinancialObservation,
   NormalizedFinancialData,
@@ -38,6 +39,9 @@ export function buildExtractionValidation(input: {
   observations: FinancialObservation[];
   screenshotsProcessed: number;
   calculatedCount: number;
+  cashFlowOcrDetected?: boolean;
+  cashFlowParserDetected?: boolean;
+  cashFlowOcrPreview?: string;
 }): ExtractionValidation {
   const { data, observations, screenshotsProcessed, calculatedCount } = input;
   const extracted = observations.filter((item) => item.origin === "extracted");
@@ -63,16 +67,28 @@ export function buildExtractionValidation(input: {
         );
 
   const missingInputs: string[] = [];
-  if (richest) {
-    if (richest.incomeStatement.revenue === null) missingInputs.push("Revenue");
-    if (richest.incomeStatement.netProfit === null) missingInputs.push("PAT");
-    if (richest.cashFlow.operatingCashFlow === null) missingInputs.push("CFO");
-    if (richest.cashFlow.capitalExpenditure === null) missingInputs.push("Capex");
-    if (richest.balanceSheet.totalDebt === null) missingInputs.push("Total debt");
-    if (richest.balanceSheet.totalEquity === null) missingInputs.push("Equity");
-    if (richest.cashFlow.principalRepayment === null) {
-      missingInputs.push("Principal repayment");
-    }
+  const anyPeriod = (pick: (period: PeriodFinancialData) => unknown) =>
+    data.periods.some((period) => pick(period) != null);
+  if (!anyPeriod((period) => period.incomeStatement.revenue)) {
+    missingInputs.push("Revenue");
+  }
+  if (!anyPeriod((period) => period.incomeStatement.netProfit)) {
+    missingInputs.push("PAT");
+  }
+  if (!anyPeriod((period) => period.cashFlow.operatingCashFlow)) {
+    missingInputs.push("CFO");
+  }
+  if (!anyPeriod((period) => period.cashFlow.capitalExpenditure)) {
+    missingInputs.push("Capex");
+  }
+  if (!anyPeriod((period) => period.balanceSheet.totalDebt)) {
+    missingInputs.push("Total debt");
+  }
+  if (!anyPeriod((period) => period.balanceSheet.totalEquity)) {
+    missingInputs.push("Equity");
+  }
+  if (!anyPeriod((period) => period.cashFlow.principalRepayment)) {
+    missingInputs.push("Principal repayment");
   }
 
   const validations: RatioValidation[] = [];
@@ -134,6 +150,39 @@ export function buildExtractionValidation(input: {
   const total = countPossiblePeriodFields();
   const available = richest ? countExtractedFields(richest) : 0;
 
+  const cashPeriod =
+    data.periods.find(
+      (period) =>
+        period.cashFlow.operatingCashFlow !== null ||
+        period.cashFlow.capitalExpenditure !== null,
+    ) ?? richest;
+  const cfoObs = extracted.find((item) => item.metric === "cfo");
+  const capexObs = extracted.find((item) => item.metric === "capex");
+  const cashFlowDebug: CashFlowDebug = {
+    ocrDetected: Boolean(input.cashFlowOcrDetected),
+    parserDetected: Boolean(input.cashFlowParserDetected),
+    normalizedDetected: Boolean(
+      cashPeriod &&
+        (cashPeriod.cashFlow.operatingCashFlow !== null ||
+          cashPeriod.cashFlow.capitalExpenditure !== null),
+    ),
+    cfo: cashPeriod?.cashFlow.operatingCashFlow ?? null,
+    capex: cashPeriod?.cashFlow.capitalExpenditure ?? null,
+    fcf: cashPeriod?.cashFlow.freeCashFlow ?? null,
+    cfoSource: cfoObs?.source ?? (cashPeriod?.cashFlow.operatingCashFlow !== null ? "normalized dataset" : null),
+    capexSource:
+      capexObs?.source ??
+      (cashPeriod?.cashFlow.capitalExpenditure !== null ? "normalized dataset" : null),
+    periods: data.periods
+      .filter(
+        (period) =>
+          period.cashFlow.operatingCashFlow !== null ||
+          period.cashFlow.capitalExpenditure !== null,
+      )
+      .map((period) => period.period ?? `FY${period.year ?? ""}`),
+    ocrPreview: input.cashFlowOcrPreview ?? "",
+  };
+
   return {
     screenshotsProcessed,
     filesProcessed: data.sourceFiles.length,
@@ -146,6 +195,7 @@ export function buildExtractionValidation(input: {
     averageConfidence,
     missingInputs,
     validations,
+    cashFlowDebug,
   };
 }
 

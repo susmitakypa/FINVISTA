@@ -23,7 +23,7 @@ function fcfFromComponents(
   capex: FinancialValue,
 ): FinancialValue {
   if (cfo === null || capex === null) return null;
-  return capex < 0 ? finite(cfo + capex) : finite(cfo - capex);
+  return finite(cfo - Math.abs(capex));
 }
 
 function ratio(numerator: FinancialValue, denominator: FinancialValue): FinancialValue {
@@ -48,6 +48,9 @@ export function enrichPeriodWithDerived(period: PeriodFinancialData): {
   const income = { ...period.incomeStatement };
   const balance = { ...period.balanceSheet };
   const cash = { ...period.cashFlow };
+  if (cash.capitalExpenditure !== null) {
+    cash.capitalExpenditure = Math.abs(cash.capitalExpenditure);
+  }
   const ratios = { ...period.ratios };
   const calculated: FinancialObservation[] = [];
   const label = period.period ?? (period.year ? `FY${period.year}` : "unknown");

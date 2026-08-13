@@ -220,9 +220,23 @@ function compareExtracted(
   };
 }
 
+function latestPeriodWith(
+  periods: PeriodFinancialData[],
+  selected: PeriodFinancialData | null,
+  has: (period: PeriodFinancialData) => boolean,
+): PeriodFinancialData | null {
+  if (selected && has(selected)) return selected;
+  const type =
+    selected && inferPeriodType(selected) === "quarterly" ? "quarterly" : "annual";
+  const pool = comparablePeriods(periods, type);
+  return [...pool]
+    .sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+    .find(has) ?? null;
+}
+
 function fcfFrom(cfo: FinancialValue, capex: FinancialValue): FinancialValue {
   if (cfo === null || capex === null) return null;
-  return capex < 0 ? finite(cfo + capex) : finite(cfo - capex);
+  return finite(cfo - Math.abs(capex));
 }
 
 function documentSource(coverage: DocumentCoverage): string {
@@ -424,16 +438,36 @@ export function analyzeDebtSizing(
     principalSource = "Assumption";
   }
 
-  const cfo = latest?.cashFlow.operatingCashFlow ?? null;
-  const capex = latest?.cashFlow.capitalExpenditure ?? null;
-  const extractedFcf = latest?.cashFlow.freeCashFlow ?? null;
+  const cashPeriod = latestPeriodWith(
+    data.periods ?? [],
+    latest,
+    (period) =>
+      period.cashFlow.operatingCashFlow !== null ||
+      period.cashFlow.capitalExpenditure !== null ||
+      period.cashFlow.freeCashFlow !== null,
+  );
+  const cfo = cashPeriod?.cashFlow.operatingCashFlow ?? null;
+  const capexRaw = cashPeriod?.cashFlow.capitalExpenditure ?? null;
+  const capex = capexRaw !== null ? Math.abs(capexRaw) : null;
+  const extractedFcf = cashPeriod?.cashFlow.freeCashFlow ?? null;
   const calculatedFcf = fcfFrom(cfo, capex);
   const fcf = extractedFcf ?? calculatedFcf;
   const fcfCalculated = extractedFcf === null && calculatedFcf !== null;
-  const investingCf = latest?.cashFlow.investingCashFlow ?? null;
-  const financingCf = latest?.cashFlow.financingCashFlow ?? null;
-  const cashTaxes = latest?.cashFlow.cashTaxes ?? null;
-  const maintenanceCapex = latest?.cashFlow.maintenanceCapex ?? null;
+  const investingCf = cashPeriod?.cashFlow.investingCashFlow ?? null;
+  const financingCf = cashPeriod?.cashFlow.financingCashFlow ?? null;
+  const cashTaxes = cashPeriod?.cashFlow.cashTaxes ?? null;
+  const maintenanceCapex = cashPeriod?.cashFlow.maintenanceCapex ?? null;
+  const cashPeriodInterest = cashPeriod?.incomeStatement.interestExpense ?? null;
+  if (interest === null && cashPeriodInterest !== null) {
+    interest = cashPeriodInterest;
+    interestSource = cashPeriod?.period
+      ? `${extractedSource} · ${cashPeriod.period}`
+      : extractedSource;
+    interestMethod = "Interest from the period that contains cash-flow data";
+  }
+  const cashSource = cashPeriod?.period
+    ? `${extractedSource} · ${cashPeriod.period}`
+    : periodSource;
 
   let cads: FinancialValue = null;
   let cadsMethod = "Not available";
@@ -775,28 +809,28 @@ export function analyzeDebtSizing(
     metric({
       label: "CFO",
       value: cfo,
-      source: periodSource,
+      source: cashSource,
       methodology: "Cash from Operating Activities",
       requiredHint: "Requires Cash Flow screenshot / statement.",
     }),
     metric({
       label: "Capex",
       value: capex,
-      source: periodSource,
+      source: cashSource,
       methodology: "Capital expenditure",
       requiredHint: "Requires Capex.",
     }),
     metric({
       label: "CFI",
       value: investingCf,
-      source: periodSource,
+      source: cashSource,
       methodology: "Cash from Investing Activities",
       requiredHint: "Requires investing cash flow.",
     }),
     metric({
       label: "CFF",
       value: financingCf,
-      source: periodSource,
+      source: cashSource,
       methodology: "Cash from Financing Activities",
       requiredHint: "Requires financing cash flow.",
     }),

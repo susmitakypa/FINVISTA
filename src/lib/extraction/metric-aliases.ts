@@ -180,7 +180,7 @@ export const METRIC_SPECS: MetricSpec[] = [
     section: "cashFlow",
     key: "operatingCashFlow",
     labels: [
-      /cash from operating/i,
+      /cash\s*f\w{0,6}\s*operat/i,
       /cash[- ]flow from operat/i,
       /operating cash flow/i,
       /net cash from operating/i,
@@ -194,9 +194,14 @@ export const METRIC_SPECS: MetricSpec[] = [
     key: "capitalExpenditure",
     labels: [
       /capital expenditure/i,
+      /capital exp/i,
       /\bcapex\b/i,
+      /cap\.?\s*ex/i,
       /purchase of (?:ppe|fixed assets)/i,
       /purchase of property/i,
+      /fixed assets purchased/i,
+      /ppe purchased/i,
+      /assets purchased/i,
     ],
   },
   {
@@ -210,7 +215,7 @@ export const METRIC_SPECS: MetricSpec[] = [
     section: "cashFlow",
     key: "financingCashFlow",
     labels: [
-      /cash from financing/i,
+      /cash\s*fr[o0mn]{0,3}\s*financ/i,
       /financing cash flow/i,
       /net cash from financing/i,
     ],
@@ -220,7 +225,7 @@ export const METRIC_SPECS: MetricSpec[] = [
     section: "cashFlow",
     key: "investingCashFlow",
     labels: [
-      /cash from investing/i,
+      /cash\s*fr[o0mn]{0,3}\s*invest/i,
       /investing cash flow/i,
       /net cash from investing/i,
     ],
@@ -403,7 +408,10 @@ export function specsForSection(section: FieldSection): FieldPattern[] {
 export function matchMetricSpec(label: string): MetricSpec | null {
   const cleaned = label.replace(/\+/g, " ").replace(/\s+/g, " ").trim();
   if (cleaned.length < 2) return null;
+  const looksLikeStatementFlow =
+    /operat|invest|financ|capex|ppe|fixed assets|cash flow/i.test(cleaned);
   for (const spec of METRIC_SPECS) {
+    if (spec.canonical === "cash" && looksLikeStatementFlow) continue;
     if (spec.labels.some((pattern) => pattern.test(cleaned))) return spec;
   }
   return null;

@@ -113,6 +113,10 @@ function findHeaderColumns(
     const columns = parseHeaderLine(line, section);
     if (columns.length > best.length) best = columns;
   }
+  if (best.length >= 2) return best;
+
+  const stitched = parseHeaderLine(lines.slice(0, 40).join(" "), section);
+  if (stitched.length > best.length) return stitched;
   return best;
 }
 
@@ -122,6 +126,9 @@ function alignToHeaders(
 ): Array<number | null> {
   if (headerCount <= 0) return [];
   if (numbers.length === headerCount) return numbers;
+  if (numbers.length === headerCount + 1) {
+    return numbers.slice(0, headerCount);
+  }
   if (numbers.length > headerCount) {
     return numbers.slice(numbers.length - headerCount);
   }
@@ -141,7 +148,13 @@ function looksLikeHeader(line: string): boolean {
   return parseHeaderLine(line, "other").length >= 2;
 }
 
+function isMostlyNumericLine(line: string): boolean {
+  const label = stripLabel(line);
+  return label.length < 3 && extractNumbersFromLine(line).length > 0;
+}
+
 function pickValue(value: number, spec: MetricSpec, line: string): number {
+  if (spec.key === "capitalExpenditure") return Math.abs(value);
   if (spec.preferPercentage || /%/.test(line)) return value;
   return value;
 }
@@ -155,7 +168,36 @@ export function setSectionValue(
   if (spec.section === "marketData") return;
   const bucket = period[spec.section] as Record<string, number | null>;
   if (!(spec.key in bucket)) return;
-  if (overwrite || bucket[spec.key] === null) bucket[spec.key] = value;
+  const next = spec.key === "capitalExpenditure" ? Math.abs(value) : value;
+  if (overwrite || bucket[spec.key] === null) bucket[spec.key] = next;
+}
+
+function numbersForRow(
+  lines: string[],
+  index: number,
+  headerYears: Set<number>,
+): { numbers: number[]; consumed: number } {
+  const line = lines[index] ?? "";
+  const direct = extractNumbersFromLine(line).filter((value) => {
+    if (headerYears.has(value) && extractNumbersFromLine(line).length <= 2) {
+      return false;
+    }
+    return true;
+  });
+  if (direct.length > 0) return { numbers: direct, consumed: 0 };
+
+  for (let offset = 1; offset <= 3; offset += 1) {
+    const next = lines[index + offset];
+    if (!next) break;
+    if (looksLikeHeader(next)) continue;
+    if (matchMetricSpec(stripLabel(next))) break;
+    if (!isMostlyNumericLine(next) && extractNumbersFromLine(next).length < 2) {
+      continue;
+    }
+    const numbers = extractNumbersFromLine(next);
+    if (numbers.length > 0) return { numbers, consumed: offset };
+  }
+  return { numbers: [], consumed: 0 };
 }
 
 export function parseScreenerTables(
@@ -181,18 +223,18 @@ export function parseScreenerTables(
   const periods = columns.map((column) =>
     createEmptyPeriod(column.period, column.year, column.periodType),
   );
+  const headerYears = new Set(columns.map((column) => column.year));
 
   const equityCapital: Array<number | null> = columns.map(() => null);
   const reserves: Array<number | null> = columns.map(() => null);
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
     if (looksLikeHeader(line)) continue;
     const label = stripLabel(line);
     if (label.length < 2) continue;
-    const numbers = extractNumbersFromLine(line).filter((value) => {
-      const yearLike = value >= 1990 && value <= 2100 && Number.isInteger(value);
-      return !yearLike;
-    });
+    const { numbers, consumed } = numbersForRow(lines, index, headerYears);
+    if (consumed > 0) index += consumed;
     if (numbers.length === 0) continue;
 
     const aligned = alignToHeaders(numbers, columns.length);
@@ -200,10 +242,10 @@ export function parseScreenerTables(
     const reserveLabel = /\breserves\b/i.test(label);
 
     if (equityLabel || reserveLabel) {
-      aligned.forEach((value, index) => {
+      aligned.forEach((value, columnIndex) => {
         if (value === null) return;
-        if (equityLabel) equityCapital[index] = value;
-        if (reserveLabel) reserves[index] = value;
+        if (equityLabel) equityCapital[columnIndex] = value;
+        if (reserveLabel) reserves[columnIndex] = value;
       });
       continue;
     }
@@ -211,10 +253,10 @@ export function parseScreenerTables(
     const spec = matchMetricSpec(label);
     if (!spec || spec.section === "marketData") continue;
 
-    aligned.forEach((rawValue, index) => {
+    aligned.forEach((rawValue, columnIndex) => {
       if (rawValue === null) return;
-      const column = columns[index];
-      const period = periods[index];
+      const column = columns[columnIndex];
+      const period = periods[columnIndex];
       if (!column || !period) return;
       const value = pickValue(rawValue, spec, line);
       setSectionValue(period, spec, value);
