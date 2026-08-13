@@ -1,7 +1,4 @@
-/**
- * Parses numeric values from financial text lines.
- * Does not infer values — only extracts explicitly present numbers.
- */
+import type { MarketData } from "../financial-data-types";
 
 export function parseFinancialNumber(raw: string): number | null {
   const trimmed = raw.trim();
@@ -310,4 +307,35 @@ export function mergePeriodData<T extends Record<string, number | null>>(
     }
   }
   return merged;
+}
+
+const MARKET_PATTERNS: FieldPattern[] = [
+  { key: "currentPrice", labels: [/current price/i, /cmp/i, /market price/i, /stock price/i] },
+  { key: "marketCap", labels: [/market cap/i, /market capitalization/i, /mcap/i] },
+  { key: "pe", labels: [/\bp\/e\b/i, /price to earning/i, /price.?earnings/i, /\bpe ratio\b/i] },
+  { key: "pb", labels: [/\bp\/b\b/i, /price to book/i, /\bpb ratio\b/i] },
+  { key: "dividendYield", labels: [/dividend yield/i, /\bdiv yield\b/i], preferPercentage: true },
+  { key: "promoterHolding", labels: [/promoter holding/i, /promoters.? holding/i, /promoter shareholding/i], preferPercentage: true },
+  { key: "promoterHoldingChange", labels: [/promoter holding change/i, /change in promoter/i, /promoter.*change/i], preferPercentage: true },
+];
+
+export function parseMarketData(text: string): MarketData {
+  const lines = normalizeText(text)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return applyPatterns(
+    {
+      currentPrice: null,
+      marketCap: null,
+      pe: null,
+      pb: null,
+      dividendYield: null,
+      promoterHolding: null,
+      promoterHoldingChange: null,
+    },
+    lines,
+    MARKET_PATTERNS,
+  );
 }

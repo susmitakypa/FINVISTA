@@ -2,6 +2,16 @@ import type { UploadCategory } from "./upload-types";
 
 export type FinancialValue = number | null;
 
+export type MarketData = {
+  currentPrice: FinancialValue;
+  marketCap: FinancialValue;
+  pe: FinancialValue;
+  pb: FinancialValue;
+  dividendYield: FinancialValue;
+  promoterHolding: FinancialValue;
+  promoterHoldingChange: FinancialValue;
+};
+
 export type IncomeStatement = {
   revenue: FinancialValue;
   ebitda: FinancialValue;
@@ -70,9 +80,22 @@ export type ProcessingSummary = {
   processedAt: string;
 };
 
+export function createEmptyMarketData(): MarketData {
+  return {
+    currentPrice: null,
+    marketCap: null,
+    pe: null,
+    pb: null,
+    dividendYield: null,
+    promoterHolding: null,
+    promoterHoldingChange: null,
+  };
+}
+
 export type NormalizedFinancialData = {
   company: string | null;
   periods: PeriodFinancialData[];
+  marketData: MarketData;
   sourceFiles: ProcessedFileRecord[];
   summary: ProcessingSummary;
 };
