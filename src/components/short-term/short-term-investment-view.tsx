@@ -109,7 +109,7 @@ export function ShortTermInvestmentView() {
             Key Positives
           </h3>
           <ul className="mt-4 space-y-2">
-            {analysis.positives.map((item) => (
+            {analysis.positives.map((item: string) => (
               <li
                 key={item}
                 className="flex items-start gap-2 text-sm text-emerald-100/80"
@@ -123,7 +123,7 @@ export function ShortTermInvestmentView() {
         <div className="rounded-xl border border-rose-500/15 bg-rose-500/[0.04] p-5">
           <h3 className="text-sm font-semibold text-rose-300">Key Risks</h3>
           <ul className="mt-4 space-y-2">
-            {analysis.risks.map((item) => (
+            {analysis.risks.map((item: string) => (
               <li
                 key={item}
                 className="flex items-start gap-2 text-sm text-rose-100/80"

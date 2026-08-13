@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/dashboard/coming-soon";
+import { ShortTermInvestmentView } from "@/components/short-term/short-term-investment-view";
 
 export default function ShortTermInvestmentPage() {
-  return <ComingSoon moduleName="Short-Term Investment" />;
+  return <ShortTermInvestmentView />;
 }
