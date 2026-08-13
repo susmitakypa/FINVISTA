@@ -5,6 +5,8 @@ import { useFinancialSession } from "@/context/financial-session-context";
 import { analyzeLongTermInvestment } from "@/lib/analysis/long-term-analysis";
 import { BarChart, MarginTrendChart } from "@/components/short-term/bar-chart";
 import { ClassificationBadge } from "./classification-badge";
+import { DataAvailabilityPanel } from "./data-availability";
+import { DetectedPeriodsPanel } from "./detected-periods";
 import { LongTermMetricGrid } from "./metric-grid";
 import { LongTermNoDataState } from "./no-data-state";
 import { QualityGrid } from "./quality-grid";
@@ -50,17 +52,27 @@ export function LongTermInvestmentView() {
             </p>
           </div>
           <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-right">
-            <p className="text-xs text-slate-500">Data Coverage</p>
+            <p className="text-xs text-slate-500">Calculated Metrics</p>
             <p className="text-2xl font-bold text-sky-400">
               {analysis.dataCoverage.coveragePercent}%
             </p>
             <p className="text-xs text-slate-600">
               {analysis.dataCoverage.availableMetrics} of{" "}
-              {analysis.dataCoverage.totalMetrics} metrics
+              {analysis.dataCoverage.totalMetrics} available
             </p>
           </div>
         </div>
       </section>
+
+      <DataAvailabilityPanel
+        coveragePercent={analysis.dataCoverage.coveragePercent}
+        availableMetrics={analysis.dataCoverage.availableMetrics}
+        totalMetrics={analysis.dataCoverage.totalMetrics}
+        presentRawFields={analysis.dataCoverage.presentRawFields}
+        missingRawFields={analysis.dataCoverage.missingRawFields}
+      />
+
+      <DetectedPeriodsPanel periods={analysis.detectedPeriods} />
 
       <ClassificationBadge
         classification={analysis.classification}
