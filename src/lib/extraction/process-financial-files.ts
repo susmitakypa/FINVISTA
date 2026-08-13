@@ -31,7 +31,8 @@ type ProcessInput = {
 };
 
 function periodKey(period: { year: number | null; period: string | null }): string {
-  return `${period.year ?? "unknown"}-${period.period ?? "unknown"}`;
+  if (period.year !== null) return `FY${period.year}`;
+  return period.period ?? "unknown";
 }
 
 function sourceRank(category: UploadCategory, periodLabel: string | null): number {
@@ -112,6 +113,84 @@ function mergeIntoPeriods(
       ratios: parsed.ratios,
     },
   ];
+}
+
+function mergePeriodRecords(
+  existing: PeriodFinancialData,
+  incoming: PeriodFinancialData,
+): PeriodFinancialData {
+  return {
+    period: existing.period ?? incoming.period,
+    year: existing.year ?? incoming.year,
+    incomeStatement: mergePeriodData(
+      existing.incomeStatement,
+      incoming.incomeStatement,
+    ),
+    balanceSheet: mergePeriodData(existing.balanceSheet, incoming.balanceSheet),
+    cashFlow: mergePeriodData(existing.cashFlow, incoming.cashFlow),
+    ratios: mergePeriodData(existing.ratios, incoming.ratios),
+  };
+}
+
+function mergeSamePeriodKeys(
+  periods: PeriodFinancialData[],
+): PeriodFinancialData[] {
+  const merged = new Map<string, PeriodFinancialData>();
+  for (const period of periods) {
+    const key = periodKey(period);
+    const existing = merged.get(key);
+    merged.set(key, existing ? mergePeriodRecords(existing, period) : period);
+  }
+  return [...merged.values()];
+}
+
+function foldOutlierPeriods(periods: PeriodFinancialData[]): PeriodFinancialData[] {
+  if (periods.length <= 1) return periods;
+
+  const years = periods
+    .map((period) => period.year)
+    .filter((year): year is number => year !== null)
+    .sort((a, b) => a - b);
+
+  if (years.length === 0) {
+    return [periods.reduce((merged, period) => mergePeriodRecords(merged, period))];
+  }
+
+  const maxYear = years[years.length - 1]!;
+  const uniqueYears = [...new Set(years)];
+  const looksLikeHistory =
+    uniqueYears.length >= 3 && maxYear - uniqueYears[0]! <= uniqueYears.length + 2;
+
+  if (looksLikeHistory) {
+    const retagged = periods.map((period) =>
+      period.year === null
+        ? { ...period, year: maxYear, period: period.period ?? `FY${maxYear}` }
+        : period,
+    );
+    return mergeSamePeriodKeys(retagged);
+  }
+
+  let latest =
+    periods.find((period) => period.year === maxYear) ?? periods[0]!;
+  const kept: PeriodFinancialData[] = [];
+
+  for (const period of periods) {
+    if (period === latest) continue;
+    const isOutlier = period.year === null || maxYear - period.year >= 8;
+    if (isOutlier) {
+      latest = mergePeriodRecords(latest, period);
+    } else {
+      kept.push(period);
+    }
+  }
+
+  latest = {
+    ...latest,
+    year: maxYear,
+    period: latest.period ?? `FY${maxYear}`,
+  };
+
+  return mergeSamePeriodKeys([...kept, latest]);
 }
 
 function coverageFromFiles(sourceFiles: ProcessedFileRecord[]): DocumentCoverage {
@@ -226,6 +305,7 @@ export async function processFinancialFiles(
     }
   }
 
+  periods = foldOutlierPeriods(periods);
   periods.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
 
   if (periods.length === 0) {

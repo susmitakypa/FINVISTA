@@ -87,53 +87,80 @@ export function extractCompanyName(text: string): string | null {
   return titledLine ?? null;
 }
 
+function parseYearToken(raw: string): number | null {
+  const year =
+    raw.length === 2 ? 2000 + Number.parseInt(raw, 10) : Number.parseInt(raw, 10);
+  if (!Number.isFinite(year)) return null;
+  const current = new Date().getFullYear();
+  if (year < 1990 || year > current + 1) return null;
+  return year;
+}
+
+function latestCandidate(
+  candidates: { period: string; year: number; weight: number }[],
+): { period: string; year: number } | null {
+  if (candidates.length === 0) return null;
+  const ranked = [...candidates].sort((a, b) => {
+    if (b.year !== a.year) return b.year - a.year;
+    return b.weight - a.weight;
+  });
+  const best = ranked[0]!;
+  return { period: best.period, year: best.year };
+}
+
 export function extractPeriodInfo(text: string): {
   period: string | null;
   year: number | null;
 } {
   const normalized = normalizeText(text);
+  const candidates: { period: string; year: number; weight: number }[] = [];
 
-  const fyMatch = normalized.match(
-    /\b(?:FY|Financial Year|F\.Y\.?)\s*['']?(\d{2,4})\b/i,
-  );
-  if (fyMatch?.[1]) {
-    const rawYear = fyMatch[1];
-    const year =
-      rawYear.length === 2
-        ? 2000 + Number.parseInt(rawYear, 10)
-        : Number.parseInt(rawYear, 10);
-    return { period: `FY${year}`, year };
+  for (const match of normalized.matchAll(
+    /\b(?:FY|Financial Year|F\.Y\.?)\s*['']?(\d{2,4})\b/gi,
+  )) {
+    const year = parseYearToken(match[1] ?? "");
+    if (year === null) continue;
+    candidates.push({ period: `FY${year}`, year, weight: 4 });
   }
 
-  const quarterMatch = normalized.match(
-    /\b(Q[1-4])\s*(?:FY)?\s*['']?(\d{2,4})\b/i,
-  );
-  if (quarterMatch) {
-    const quarter = quarterMatch[1]!.toUpperCase();
-    const rawYear = quarterMatch[2]!;
-    const year =
-      rawYear.length === 2
-        ? 2000 + Number.parseInt(rawYear, 10)
-        : Number.parseInt(rawYear, 10);
-    return { period: `${quarter} FY${year}`, year };
+  for (const match of normalized.matchAll(
+    /\b(Q[1-4])\s*(?:FY)?\s*['']?(\d{2,4})\b/gi,
+  )) {
+    const year = parseYearToken(match[2] ?? "");
+    if (year === null) continue;
+    const quarter = (match[1] ?? "Q").toUpperCase();
+    candidates.push({ period: `${quarter} FY${year}`, year, weight: 3 });
   }
 
-  const monthYearMatch = normalized.match(
-    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b/i,
-  );
-  if (monthYearMatch) {
-    const month = monthYearMatch[1]!;
-    const year = Number.parseInt(monthYearMatch[2]!, 10);
-    return { period: `${month} ${year}`, year };
+  const monthPattern =
+    /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{4})\b/gi;
+  for (const match of normalized.matchAll(monthPattern)) {
+    const year = parseYearToken(match[2] ?? "");
+    if (year === null) continue;
+    const month = (match[1] ?? "Mar").slice(0, 3);
+    const period =
+      month.toLowerCase() === "mar" ? `FY${year}` : `${month} ${year}`;
+    candidates.push({
+      period,
+      year,
+      weight: month.toLowerCase() === "mar" ? 3 : 2,
+    });
   }
 
-  const yearMatch = normalized.match(/\b(20\d{2}|19\d{2})\b/);
-  if (yearMatch?.[1]) {
-    const year = Number.parseInt(yearMatch[1], 10);
-    return { period: `${year}`, year };
+  if (candidates.length === 0) {
+    for (const match of normalized.matchAll(/\b(20\d{2})\b/g)) {
+      const year = parseYearToken(match[1] ?? "");
+      if (year === null) continue;
+      candidates.push({ period: `FY${year}`, year, weight: 1 });
+    }
   }
 
-  return { period: null, year: null };
+  const current = new Date().getFullYear();
+  const recent = candidates.filter((item) => item.year >= current - 12);
+  const best =
+    latestCandidate(recent) ??
+    latestCandidate(candidates.filter((item) => item.weight >= 4));
+  return best ?? { period: null, year: null };
 }
 
 type FieldPattern = {
@@ -143,21 +170,55 @@ type FieldPattern = {
 };
 
 const INCOME_PATTERNS: FieldPattern[] = [
-  { key: "revenue", labels: [/total revenue/i, /revenue from operations/i, /net sales/i, /sales/i, /revenue/i] },
-  { key: "ebitda", labels: [/ebitda/i] },
-  { key: "ebit", labels: [/operating profit/i, /\bebit\b/i, /pbdit/i] },
+  { key: "revenue", labels: [/total revenue/i, /revenue from operations/i, /net sales/i, /sales\s*\+?/i, /revenue/i] },
+  { key: "ebitda", labels: [/\bebitda\b/i] },
+  { key: "ebit", labels: [/operating profit/i, /\bebit\b/i, /pbdit/i, /op\.?\s*profit/i] },
   { key: "profitBeforeTax", labels: [/profit before tax/i, /\bpbt\b/i, /profit before taxation/i] },
   { key: "netProfit", labels: [/profit after tax/i, /net profit/i, /\bpat\b/i, /net income/i] },
   { key: "eps", labels: [/\beps\b/i, /earnings per share/i] },
-  { key: "interestExpense", labels: [/finance costs?/i, /interest expense/i, /interest paid/i, /finance charges?/i] },
+  {
+    key: "interestExpense",
+    labels: [
+      /finance costs?/i,
+      /interest expense/i,
+      /interest paid/i,
+      /finance charges?/i,
+      /\binterest\b(?!\s+cover)/i,
+    ],
+  },
 ];
 
 const BALANCE_PATTERNS: FieldPattern[] = [
   { key: "totalAssets", labels: [/total assets/i, /assets total/i] },
-  { key: "totalEquity", labels: [/total equity/i, /shareholders.? funds/i, /net worth/i, /total shareholders/i] },
-  { key: "totalDebt", labels: [/total debt/i, /borrowings/i, /total borrowings/i, /debt/i] },
+  {
+    key: "totalEquity",
+    labels: [
+      /total equity/i,
+      /shareholders.? funds/i,
+      /net worth/i,
+      /total shareholders/i,
+      /equity share capital/i,
+    ],
+  },
+  {
+    key: "totalDebt",
+    labels: [
+      /total debt/i,
+      /total borrowings/i,
+      /borrowings?/i,
+    ],
+  },
   { key: "netDebt", labels: [/net debt/i] },
-  { key: "cash", labels: [/cash and cash equivalents/i, /cash & cash equivalents/i, /\bcash\b/i] },
+  {
+    key: "cash",
+    labels: [
+      /cash and cash equivalents/i,
+      /cash\s*&\s*cash equivalents/i,
+      /cash equivalents/i,
+      /cash\s*&\s*bank/i,
+      /\bcash\b/i,
+    ],
+  },
   { key: "receivables", labels: [/trade receivables/i, /receivables/i] },
   { key: "inventory", labels: [/inventor(?:y|ies)/i] },
   { key: "payables", labels: [/trade payables/i, /payables/i] },
@@ -168,8 +229,18 @@ const BALANCE_PATTERNS: FieldPattern[] = [
 ];
 
 const CASHFLOW_PATTERNS: FieldPattern[] = [
-  { key: "operatingCashFlow", labels: [/cash from operating/i, /operating cash flow/i, /net cash from operating/i] },
-  { key: "capitalExpenditure", labels: [/capital expenditure/i, /\bcapex\b/i, /purchase of fixed assets/i] },
+  {
+    key: "operatingCashFlow",
+    labels: [
+      /cash from operating/i,
+      /cash[- ]flow from operat/i,
+      /operating cash flow/i,
+      /net cash from operating/i,
+      /cash from operations/i,
+      /\bcfo\b/i,
+    ],
+  },
+  { key: "capitalExpenditure", labels: [/capital expenditure/i, /\bcapex\b/i, /purchase of (?:ppe|fixed assets)/i] },
   { key: "freeCashFlow", labels: [/free cash flow/i, /\bfcf\b/i] },
   { key: "financingCashFlow", labels: [/cash from financing/i, /financing cash flow/i, /net cash from financing/i] },
   { key: "investingCashFlow", labels: [/cash from investing/i, /investing cash flow/i, /net cash from investing/i] },
@@ -194,9 +265,16 @@ function lineMatchesLabel(line: string, labels: RegExp[]): boolean {
   return labels.some((label) => label.test(line));
 }
 
-function extractFieldValue(line: string, pattern: FieldPattern): number | null {
-  if (!lineMatchesLabel(line, pattern.labels)) return null;
+function looksLikePeriodHeader(line: string): boolean {
+  return (
+    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4}\b/i.test(
+      line,
+    ) &&
+    extractNumbersFromLine(line).every((value) => value >= 1990 && value <= 2100)
+  );
+}
 
+function pickNumericValue(line: string, pattern: FieldPattern): number | null {
   const numbers = extractNumbersFromLine(line);
   if (numbers.length === 0) return null;
 
@@ -208,18 +286,49 @@ function extractFieldValue(line: string, pattern: FieldPattern): number | null {
   return numbers[numbers.length - 1] ?? null;
 }
 
+function extractFieldValueFromLines(
+  lines: string[],
+  index: number,
+  pattern: FieldPattern,
+  allPatterns: FieldPattern[],
+): number | null {
+  const line = lines[index];
+  if (!line || !lineMatchesLabel(line, pattern.labels)) return null;
+
+  const sameLine = pickNumericValue(line, pattern);
+  if (sameLine !== null) return sameLine;
+
+  for (const offset of [1, 2]) {
+    const next = lines[index + offset];
+    if (!next) continue;
+    if (looksLikePeriodHeader(next)) continue;
+    if (allPatterns.some((item) => lineMatchesLabel(next, item.labels))) continue;
+    const value = pickNumericValue(next, pattern);
+    if (value !== null) return value;
+  }
+
+  return null;
+}
+
 function applyPatterns<T extends Record<string, number | null>>(
   target: T,
   lines: string[],
   patterns: FieldPattern[],
+  extraPatterns: FieldPattern[] = [],
 ): T {
   const result = { ...target };
+  const allPatterns = [...patterns, ...extraPatterns];
 
   for (const pattern of patterns) {
     if (result[pattern.key as keyof T] !== null) continue;
 
-    for (const line of lines) {
-      const value = extractFieldValue(line, pattern);
+    for (let index = 0; index < lines.length; index += 1) {
+      const value = extractFieldValueFromLines(
+        lines,
+        index,
+        pattern,
+        allPatterns,
+      );
       if (value !== null) {
         (result as Record<string, number | null>)[pattern.key] = value;
         break;
@@ -229,6 +338,13 @@ function applyPatterns<T extends Record<string, number | null>>(
 
   return result;
 }
+
+const ALL_FIELD_PATTERNS: FieldPattern[] = [
+  ...INCOME_PATTERNS,
+  ...BALANCE_PATTERNS,
+  ...CASHFLOW_PATTERNS,
+  ...RATIO_PATTERNS,
+];
 
 export function parseFinancialText(text: string) {
   const normalized = normalizeText(text);
@@ -252,6 +368,7 @@ export function parseFinancialText(text: string) {
     },
     lines,
     INCOME_PATTERNS,
+    ALL_FIELD_PATTERNS,
   );
 
   const balanceSheet = applyPatterns(
@@ -271,7 +388,27 @@ export function parseFinancialText(text: string) {
     },
     lines,
     BALANCE_PATTERNS,
+    ALL_FIELD_PATTERNS,
   );
+
+  let totalEquity: number | null = balanceSheet.totalEquity;
+  if (totalEquity === null) {
+    const equityParts = applyPatterns(
+      { equityCapital: null as number | null, reserves: null as number | null },
+      lines,
+      [
+        { key: "equityCapital", labels: [/equity capital/i, /share capital/i] },
+        { key: "reserves", labels: [/\breserves\b/i, /reserves and surplus/i] },
+      ],
+      ALL_FIELD_PATTERNS,
+    );
+    if (equityParts.equityCapital !== null && equityParts.reserves !== null) {
+      totalEquity = equityParts.equityCapital + equityParts.reserves;
+    } else {
+      totalEquity = equityParts.equityCapital ?? equityParts.reserves ?? null;
+    }
+  }
+  const balanced = { ...balanceSheet, totalEquity };
 
   const cashFlow = applyPatterns(
     {
@@ -286,6 +423,7 @@ export function parseFinancialText(text: string) {
     },
     lines,
     CASHFLOW_PATTERNS,
+    ALL_FIELD_PATTERNS,
   );
 
   const ratios = applyPatterns(
@@ -311,6 +449,7 @@ export function parseFinancialText(text: string) {
         "netProfitMargin",
       ].includes(pattern.key),
     })),
+    ALL_FIELD_PATTERNS,
   );
 
   return {
@@ -318,7 +457,7 @@ export function parseFinancialText(text: string) {
     period,
     year,
     incomeStatement,
-    balanceSheet,
+    balanceSheet: balanced,
     cashFlow,
     ratios,
     textLength: normalized.length,
