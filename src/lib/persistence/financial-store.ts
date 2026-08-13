@@ -1,9 +1,11 @@
 import type { NormalizedFinancialData } from "@/lib/financial-data-types";
+import { hydrateNormalizedData } from "@/lib/financial-data-types";
 import type {
   UploadCategory,
   UploadedFileEntry,
   UploadFileStatus,
 } from "@/lib/upload-types";
+import { migrateUploadCategory } from "@/lib/upload-types";
 import { isImageFile } from "@/lib/upload-utils";
 
 const DB_NAME = "finvista-pipeline";
@@ -18,8 +20,9 @@ export type FilesByCategory = Record<UploadCategory, UploadedFileEntry[]>;
 export function createEmptyFiles(): FilesByCategory {
   return {
     screener: [],
-    "balance-sheet": [],
-    "profit-loss": [],
+    "annual-report": [],
+    "investor-presentation": [],
+    "quarterly-results": [],
   };
 }
 
@@ -122,8 +125,9 @@ export async function loadPersistedUploads(): Promise<FilesByCategory> {
   );
 
   for (const record of records) {
-    if (!files[record.category]) continue;
-    files[record.category].push(recordToEntry(record));
+    const category = migrateUploadCategory(record.category);
+    if (!category) continue;
+    files[category].push(recordToEntry({ ...record, category }));
   }
 
   return files;
@@ -174,14 +178,15 @@ export async function loadPersistedFinancialData(): Promise<NormalizedFinancialD
     >,
   );
 
-  if (stored) return stored;
+  if (stored) return hydrateNormalizedData(stored);
 
   try {
     const legacy = sessionStorage.getItem(LEGACY_SESSION_KEY);
     if (!legacy) return null;
     const parsed = JSON.parse(legacy) as NormalizedFinancialData;
-    await savePersistedFinancialData(parsed);
-    return parsed;
+    const hydrated = hydrateNormalizedData(parsed);
+    await savePersistedFinancialData(hydrated);
+    return hydrated;
   } catch {
     return null;
   }

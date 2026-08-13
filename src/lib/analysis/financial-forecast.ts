@@ -543,7 +543,9 @@ export function buildFinancialForecast(
     "The model does not invent missing historical numbers.",
   ];
   if (!canForecastRevenue) {
-    limitations.push("Revenue forecast is marked Insufficient data until two revenue periods exist.");
+    limitations.push(
+      "Forecast unavailable — additional historical periods required.",
+    );
   }
   if (!canForecastProfit) {
     limitations.push("Profit forecast needs historical operating and/or PAT margins.");
@@ -630,7 +632,7 @@ export function buildFinancialForecast(
 }
 
 export function formatForecastValue(value: FinancialValue, unit = ""): string {
-  if (value === null) return "Insufficient data";
+  if (value === null) return "Data unavailable";
   const formatted = value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return unit ? `${formatted}${unit}` : formatted;
 }

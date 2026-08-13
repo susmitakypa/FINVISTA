@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { useFinancialSession } from "@/context/financial-session-context";
 import { NAV_ITEMS } from "@/lib/constants";
 
 function getHeaderContent(pathname: string) {
@@ -21,9 +22,34 @@ function getHeaderContent(pathname: string) {
   };
 }
 
+const STATUS_CONFIG = {
+  "awaiting-upload": {
+    label: "Awaiting data upload",
+    color: "bg-amber-400",
+    ping: true,
+  },
+  "ready-to-process": {
+    label: "Files ready to be processed",
+    color: "bg-sky-400",
+    ping: true,
+  },
+  processing: {
+    label: "Processing financial data…",
+    color: "bg-indigo-400",
+    ping: true,
+  },
+  processed: {
+    label: "Financial data processed",
+    color: "bg-emerald-400",
+    ping: false,
+  },
+} as const;
+
 export function Header() {
   const pathname = usePathname();
   const { title, subtitle } = getHeaderContent(pathname);
+  const { dashboardStatus, financialData } = useFinancialSession();
+  const status = STATUS_CONFIG[dashboardStatus];
 
   return (
     <header className="sticky top-0 z-10 border-b border-white/5 bg-[#0a0f1c]/70 backdrop-blur-xl">
@@ -54,7 +80,11 @@ export function Header() {
             <input
               id="company-search"
               type="search"
-              placeholder="Search company or ticker..."
+              placeholder={
+                financialData?.company
+                  ? financialData.company
+                  : "Search company or ticker..."
+              }
               disabled
               className="w-full rounded-lg border border-white/10 bg-white/5 py-2 pl-10 pr-4 text-sm text-slate-300 placeholder:text-slate-600 transition-colors focus:border-sky-500/40 focus:outline-none focus:ring-1 focus:ring-sky-500/30 disabled:cursor-not-allowed sm:w-72"
             />
@@ -62,11 +92,17 @@ export function Header() {
 
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
             <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-40" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-400" />
+              {status.ping && (
+                <span
+                  className={`absolute inline-flex h-full w-full animate-ping rounded-full ${status.color} opacity-40`}
+                />
+              )}
+              <span
+                className={`relative inline-flex h-2 w-2 rounded-full ${status.color}`}
+              />
             </span>
             <span className="text-xs font-medium text-slate-300">
-              Awaiting data upload
+              {status.label}
             </span>
           </div>
         </div>

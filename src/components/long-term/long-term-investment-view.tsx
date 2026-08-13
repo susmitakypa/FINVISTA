@@ -9,6 +9,7 @@ import { DataAvailabilityPanel } from "./data-availability";
 import { DetectedPeriodsPanel } from "./detected-periods";
 import { LongTermMetricGrid } from "./metric-grid";
 import { LongTermNoDataState } from "./no-data-state";
+import { QualitativePanel } from "./qualitative-panel";
 import { QualityGrid } from "./quality-grid";
 import { RiskPanel } from "./risk-panel";
 import { ThesisPanel } from "./thesis-panel";
@@ -77,7 +78,23 @@ export function LongTermInvestmentView() {
       <ClassificationBadge
         classification={analysis.classification}
         score={analysis.overallScore}
+        insufficientData={analysis.insufficientData}
       />
+
+      {analysis.insights.length > 0 && (
+        <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
+            Insights from available data
+          </h3>
+          <ul className="mt-3 space-y-2">
+            {analysis.insights.map((item) => (
+              <li key={item} className="text-sm leading-relaxed text-slate-300">
+                {item}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
@@ -123,6 +140,7 @@ export function LongTermInvestmentView() {
       </section>
 
       <QualityGrid pillars={analysis.qualityPillars} />
+      <QualitativePanel items={analysis.qualitativeItems} />
       <RiskPanel risks={analysis.risks} />
 
       <div className="grid gap-5 lg:grid-cols-2">

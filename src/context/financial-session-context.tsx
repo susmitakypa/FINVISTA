@@ -188,7 +188,7 @@ export function FinancialSessionProvider({
 
       setFilesByCategory((prev) => ({
         ...prev,
-        [category]: [...prev[category], ...pendingEntries],
+        [category]: [...(prev[category] ?? []), ...pendingEntries],
       }));
       setProcessState({ status: "idle" });
 
@@ -201,7 +201,7 @@ export function FinancialSessionProvider({
 
       setFilesByCategory((prev) => ({
         ...prev,
-        [category]: prev[category].map((entry) =>
+        [category]: (prev[category] ?? []).map((entry) =>
           validEntries.some((valid) => valid.id === entry.id)
             ? { ...entry, status: "success" as const }
             : entry,
@@ -213,11 +213,12 @@ export function FinancialSessionProvider({
 
   const removeFile = useCallback((category: UploadCategory, id: string) => {
     setFilesByCategory((prev) => {
-      const removed = prev[category].find((entry) => entry.id === id);
+      const list = prev[category] ?? [];
+      const removed = list.find((entry) => entry.id === id);
       if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
       return {
         ...prev,
-        [category]: prev[category].filter((entry) => entry.id !== id),
+        [category]: list.filter((entry) => entry.id !== id),
       };
     });
     setProcessState({ status: "idle" });
@@ -277,9 +278,16 @@ export function FinancialSessionProvider({
       const result = await processFinancialFiles(inputs);
       setFinancialData(result);
       await savePersistedFinancialData(result);
+      const failed = result.sourceFiles.filter((file) => file.status === "failed");
+      const message =
+        failed.length === result.sourceFiles.length
+          ? "No financial fields could be read. Other documents can still be added."
+          : failed.length > 0
+            ? `Financial data processed. ${failed.map((file) => file.name).join(", ")} could not be processed.`
+            : "Financial data processed";
       setProcessState({
         status: "processed",
-        message: "Financial data processed",
+        message,
       });
     } catch {
       setProcessState({

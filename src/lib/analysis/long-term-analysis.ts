@@ -3,8 +3,12 @@ import type {
   MarketData,
   NormalizedFinancialData,
   PeriodFinancialData,
+  QualitativeInsights,
 } from "@/lib/financial-data-types";
-import { countExtractedFields } from "@/lib/financial-data-types";
+import {
+  countExtractedFields,
+  createEmptyQualitative,
+} from "@/lib/financial-data-types";
 
 export type LongTermMetric = {
   label: string;
@@ -15,6 +19,7 @@ export type LongTermMetric = {
   formula: string;
   inputsUsed: string[];
   missingInputs: string[];
+  unavailableHint?: string;
 };
 
 export type DetectedPeriod = {
@@ -25,10 +30,17 @@ export type DetectedPeriod = {
 };
 
 export type LongTermClassification =
-  | "STRONG BUY"
-  | "BUY"
-  | "HOLD"
-  | "AVOID";
+  | "STRONG LONG-TERM"
+  | "POSITIVE"
+  | "NEUTRAL"
+  | "CAUTIOUS"
+  | "INSUFFICIENT DATA";
+
+export type QualitativeItem = {
+  label: string;
+  available: boolean;
+  detail: string;
+};
 
 export type QualityPillar = {
   key: string;
@@ -59,7 +71,10 @@ export type LongTermAnalysis = {
   risks: RiskItem[];
   overallScore: number | null;
   classification: LongTermClassification;
+  insufficientData: boolean;
   scoreExplanation: string[];
+  insights: string[];
+  qualitativeItems: QualitativeItem[];
   thesis: {
     bull: string;
     base: string;
@@ -135,6 +150,7 @@ function metric(options: {
   formula: string;
   inputsUsed: string[];
   missingInputs: string[];
+  unavailableHint?: string;
 }): LongTermMetric {
   return {
     label: options.label,
@@ -145,6 +161,7 @@ function metric(options: {
     formula: options.formula,
     inputsUsed: options.inputsUsed,
     missingInputs: options.missingInputs,
+    unavailableHint: options.unavailableHint,
   };
 }
 
@@ -603,11 +620,22 @@ function scoreEarningsConsistency(
 export function analyzeLongTermInvestment(
   data: NormalizedFinancialData | null,
 ): LongTermAnalysis | null {
-  if (!data || data.periods.length === 0) return null;
+  if (!data) return null;
 
-  const latest = selectLatest(data.periods);
-  const prior = selectPrior(data.periods, latest);
-  const detectedPeriods = buildDetectedPeriods(data.periods);
+  const qualitative: QualitativeInsights =
+    data.qualitative ?? createEmptyQualitative();
+  const hasQualitative = Object.values(qualitative).some((value) =>
+    Boolean(value),
+  );
+  if ((!data.periods || data.periods.length === 0) && !hasQualitative) {
+    return null;
+  }
+
+  const periods = data.periods ?? [];
+
+  const latest = selectLatest(periods);
+  const prior = selectPrior(periods, latest);
+  const detectedPeriods = buildDetectedPeriods(periods);
 
   const revenue = latest?.incomeStatement.revenue ?? null;
   const pat = latest?.incomeStatement.netProfit ?? null;
@@ -632,31 +660,46 @@ export function analyzeLongTermInvestment(
   const extractedOpm = latest?.ratios.operatingMargin ?? null;
 
   const revenueGrowth = twoPeriodGrowth(
-    data.periods,
+    periods,
     (period) => period.incomeStatement.revenue,
     "Revenue",
   );
   const patGrowth = twoPeriodGrowth(
-    data.periods,
+    periods,
     (period) => period.incomeStatement.netProfit,
     "PAT",
   );
+  const epsGrowth = twoPeriodGrowth(
+    periods,
+    (period) => period.incomeStatement.eps,
+    "EPS",
+  );
+  const ebitdaGrowth = twoPeriodGrowth(
+    periods,
+    (period) => period.incomeStatement.ebitda,
+    "EBITDA",
+  );
+  const roceTrend = twoPeriodGrowth(
+    periods,
+    (period) => period.ratios.roce,
+    "ROCE",
+  );
   const revenueCagr = seriesCagr(
-    data.periods,
+    periods,
     (period) => period.incomeStatement.revenue,
     "Revenue",
   );
   const earningsCagr = seriesCagr(
-    data.periods,
+    periods,
     (period) => period.incomeStatement.netProfit,
     "PAT",
   );
   const assetCagr = seriesCagr(
-    data.periods,
+    periods,
     (period) => period.balanceSheet.totalAssets,
     "Total assets",
   );
-  const fcfCagr = seriesCagr(data.periods, freeCashFlowOf, "Free cash flow");
+  const fcfCagr = seriesCagr(periods, freeCashFlowOf, "Free cash flow");
 
   let operatingMargin: FinancialValue = null;
   const opmInputs: string[] = [];
@@ -925,12 +968,29 @@ export function analyzeLongTermInvestment(
       missingInputs: ebitda === null ? ["EBITDA"] : [],
     }),
     metric({
+      label: "EBITDA margin",
+      value: computeMargin(ebitda, revenue),
+      unit: "%",
+      formula: "EBITDA / revenue",
+      inputsUsed:
+        ebitda !== null && revenue !== null
+          ? [`EBITDA = ${describeAmount(ebitda)}`, `Revenue = ${describeAmount(revenue)}`]
+          : [],
+      missingInputs: [
+        ...(ebitda === null ? ["EBITDA"] : []),
+        ...(revenue === null ? ["Revenue"] : []),
+        ...(revenue === 0 ? ["Non-zero revenue"] : []),
+      ].filter((item, index, list) => list.indexOf(item) === index),
+      unavailableHint: "Requires EBITDA and revenue.",
+    }),
+    metric({
       label: "Operating margin",
       value: operatingMargin,
       unit: "%",
       formula: "OPM, or operating profit / revenue",
       inputsUsed: opmInputs,
       missingInputs: opmMissing,
+      unavailableHint: "Requires operating profit and revenue.",
     }),
     metric({
       label: "PAT",
@@ -939,6 +999,21 @@ export function analyzeLongTermInvestment(
       formula: "Latest extracted profit after tax",
       inputsUsed: pat === null ? [] : [`PAT = ${describeAmount(pat)}`],
       missingInputs: pat === null ? ["PAT / net profit"] : [],
+    }),
+    metric({
+      label: "PAT margin",
+      value: computeMargin(pat, revenue),
+      unit: "%",
+      formula: "PAT / revenue",
+      inputsUsed:
+        pat !== null && revenue !== null
+          ? [`PAT = ${describeAmount(pat)}`, `Revenue = ${describeAmount(revenue)}`]
+          : [],
+      missingInputs: [
+        ...(pat === null ? ["PAT"] : []),
+        ...(revenue === null ? ["Revenue"] : []),
+      ],
+      unavailableHint: "Requires PAT and revenue.",
     }),
     metric({
       label: "PAT growth",
@@ -955,6 +1030,7 @@ export function analyzeLongTermInvestment(
       formula: "Extracted ROE, or PAT / average equity",
       inputsUsed: roeInputs,
       missingInputs: roeMissing,
+      unavailableHint: "Requires PAT and shareholder equity.",
     }),
     metric({
       label: "ROCE",
@@ -963,6 +1039,16 @@ export function analyzeLongTermInvestment(
       formula: "Extracted ROCE, or EBIT / capital employed",
       inputsUsed: roceInputs,
       missingInputs: roceMissing,
+      unavailableHint: "Requires operating profit and capital employed.",
+    }),
+    metric({
+      label: "Debt",
+      value: debt,
+      unit: " Cr",
+      formula: "Latest extracted total debt",
+      inputsUsed: debt === null ? [] : [`Total debt = ${describeAmount(debt)}`],
+      missingInputs: debt === null ? ["Total debt"] : [],
+      unavailableHint: "Requires balance-sheet total debt.",
     }),
     metric({
       label: "Debt-to-equity",
@@ -971,6 +1057,7 @@ export function analyzeLongTermInvestment(
       formula: "Extracted D/E, or total debt / equity",
       inputsUsed: deInputs,
       missingInputs: deMissing,
+      unavailableHint: "Requires total debt and shareholder equity.",
     }),
     metric({
       label: "Interest coverage",
@@ -979,6 +1066,7 @@ export function analyzeLongTermInvestment(
       formula: "Extracted coverage, or EBIT / (EBIT − PBT)",
       inputsUsed: icInputs,
       missingInputs: icMissing,
+      unavailableHint: "Requires EBIT and finance cost.",
     }),
     metric({
       label: "Free cash flow",
@@ -1006,6 +1094,15 @@ export function analyzeLongTermInvestment(
       formula: "(Last PAT / First PAT)^(1/n) − 1",
       inputsUsed: earningsCagr.inputsUsed,
       missingInputs: earningsCagr.missingInputs,
+    }),
+    metric({
+      label: "EPS growth",
+      value: epsGrowth.value,
+      unit: "%",
+      formula: "(Current EPS / Previous EPS) − 1",
+      inputsUsed: epsGrowth.inputsUsed,
+      missingInputs: epsGrowth.missingInputs,
+      unavailableHint: "Requires EPS in at least two periods.",
     }),
     metric({
       label: "Latest operating margin",
@@ -1037,6 +1134,24 @@ export function analyzeLongTermInvestment(
               ...(latestOpm === null ? ["Latest operating margin"] : []),
               ...(priorOpm === null ? ["Prior-period operating margin"] : []),
             ],
+    }),
+    metric({
+      label: "ROCE trend",
+      value: roceTrend.value,
+      unit: "%",
+      formula: "(Current ROCE / Previous ROCE) − 1",
+      inputsUsed: roceTrend.inputsUsed,
+      missingInputs: roceTrend.missingInputs,
+      unavailableHint: "Requires extracted ROCE in at least two periods.",
+    }),
+    metric({
+      label: "Capital expenditure",
+      value: capex,
+      unit: " Cr",
+      formula: "Latest extracted capex",
+      inputsUsed: capex === null ? [] : [`Capex = ${describeAmount(capex)}`],
+      missingInputs: capex === null ? ["Capital expenditure"] : [],
+      unavailableHint: "Requires cash-flow capital expenditure.",
     }),
     metric({
       label: "Free-cash-flow CAGR",
@@ -1112,7 +1227,7 @@ export function analyzeLongTermInvestment(
     scoreCashConversion(pat, fcf, cfo),
     scoreBalanceSheet(debtEquity, interestCoverage, cash, currentRatio),
     scoreCapitalEfficiency(roce, revenueCagr.value, assetCagr.value),
-    scoreEarningsConsistency(data.periods),
+    scoreEarningsConsistency(periods),
   ];
 
   const scoredPillars = qualityPillars.filter((pillar) => pillar.score !== null);
@@ -1183,7 +1298,7 @@ export function analyzeLongTermInvestment(
   }
 
   const profits = observations(
-    data.periods,
+    periods,
     (period) => period.incomeStatement.netProfit,
   ).map((entry) => entry.value);
   if (profits.length < 2) {
@@ -1253,15 +1368,52 @@ export function analyzeLongTermInvestment(
 
   if (fcf !== null && fcf < 0) {
     risks.push({
-      label: "Cash generation",
+      label: "Cash-flow risk",
       level: "High",
       detail: "Latest free cash flow is negative.",
+    });
+  } else if (fcf === null && cfo === null) {
+    risks.push({
+      label: "Cash-flow risk",
+      level: "Unavailable",
+      detail: "Cash-flow strength cannot be assessed from the uploaded documents.",
     });
   } else if (interestCoverage !== null && interestCoverage < 2) {
     risks.push({
       label: "Coverage risk",
       level: "High",
       detail: `Interest coverage of ${interestCoverage.toFixed(1)}x is thin.`,
+    });
+  }
+
+  if (qualitative.risks) {
+    const text = qualitative.risks.toLowerCase();
+    if (text.includes("concentration") || text.includes("customer")) {
+      risks.push({
+        label: "Customer concentration",
+        level: "Moderate",
+        detail: qualitative.risks,
+      });
+    }
+    if (text.includes("cyclical") || text.includes("cycle")) {
+      risks.push({
+        label: "Cyclical risk",
+        level: "Moderate",
+        detail: qualitative.risks,
+      });
+    }
+    risks.push({
+      label: "Industry / disclosed risks",
+      level: "Moderate",
+      detail: qualitative.risks,
+    });
+  }
+
+  if (!qualitative.managementGuidance) {
+    risks.push({
+      label: "Guidance risk",
+      level: "Unavailable",
+      detail: "Management guidance was not extracted from the uploaded documents.",
     });
   }
 
@@ -1292,28 +1444,44 @@ export function analyzeLongTermInvestment(
   if (peExtracted !== null) presentRaw.add("P/E (extracted)");
   if (pbExtracted !== null) presentRaw.add("P/B (extracted)");
 
-  let classification: LongTermClassification = "HOLD";
-  if (overallScore === null || scoredPillars.length < 2 || availableMetrics < 6) {
-    classification = "HOLD";
-  } else if (overallScore >= 80) {
-    classification = "STRONG BUY";
-  } else if (overallScore >= 65) {
-    classification = "BUY";
-  } else if (overallScore >= 45) {
-    classification = "HOLD";
+  const insufficientData =
+    overallScore === null || scoredPillars.length < 2 || availableMetrics < 6;
+
+  let classification: LongTermClassification = "INSUFFICIENT DATA";
+  if (insufficientData) {
+    classification = "INSUFFICIENT DATA";
+  } else if (overallScore !== null && overallScore >= 80) {
+    classification = "STRONG LONG-TERM";
+  } else if (overallScore !== null && overallScore >= 65) {
+    classification = "POSITIVE";
+  } else if (overallScore !== null && overallScore >= 45) {
+    classification = "NEUTRAL";
   } else {
-    classification = "AVOID";
+    classification = "CAUTIOUS";
   }
 
   const highRiskCount = risks.filter((risk) => risk.level === "High").length;
-  if (highRiskCount >= 3 && classification === "STRONG BUY") {
-    classification = "BUY";
+  if (highRiskCount >= 3 && classification === "STRONG LONG-TERM") {
+    classification = "POSITIVE";
   }
-  if (highRiskCount >= 3 && overallScore !== null && overallScore < 55) {
-    classification = "AVOID";
+  if (
+    !insufficientData &&
+    highRiskCount >= 3 &&
+    overallScore !== null &&
+    overallScore < 55
+  ) {
+    classification = "CAUTIOUS";
   }
 
   const scoreExplanation: string[] = [];
+  if (insufficientData) {
+    scoreExplanation.push(
+      "Insufficient data for a complete long-term assessment.",
+    );
+    scoreExplanation.push(
+      "Available analysis based on uploaded data is shown below. Missing metrics are marked Data unavailable.",
+    );
+  }
   if (overallScore === null) {
     scoreExplanation.push(
       "An overall score could not be formed because quality pillars lacked sufficient uploaded inputs.",
@@ -1330,14 +1498,96 @@ export function analyzeLongTermInvestment(
       );
     }
   }
-  if (availableMetrics < 6) {
-    scoreExplanation.push(
-      "Limited metric coverage forces a conservative HOLD ceiling until more statement fields are extracted.",
-    );
-  }
   scoreExplanation.push(
     "This is an analytical assessment based only on uploaded financial data. It is not investment advice and is not a guarantee of future returns.",
   );
+
+  const insights: string[] = [];
+  if (revenueGrowth.value !== null && revenueGrowth.value > 0) {
+    insights.push(
+      `Revenue increased by ${revenueGrowth.value.toFixed(1)}%, indicating positive top-line growth.`,
+    );
+  } else if (revenueGrowth.value !== null && revenueGrowth.value < 0) {
+    insights.push(
+      `Revenue declined by ${Math.abs(revenueGrowth.value).toFixed(1)}%.`,
+    );
+  }
+  if (patGrowth.value !== null && patGrowth.value > 0) {
+    insights.push(
+      `PAT increased by ${patGrowth.value.toFixed(1)}%, indicating improving profitability.`,
+    );
+  } else if (patGrowth.value !== null && patGrowth.value < 0) {
+    insights.push(
+      `PAT declined by ${Math.abs(patGrowth.value).toFixed(1)}%.`,
+    );
+  }
+  if (ebitdaGrowth.value !== null && ebitdaGrowth.value > 0) {
+    insights.push(
+      `EBITDA increased by ${ebitdaGrowth.value.toFixed(1)}%.`,
+    );
+  }
+  if (latestOpm !== null && priorOpm !== null && latestOpm > priorOpm) {
+    insights.push(
+      `EBITDA / operating margin expanded from ${priorOpm.toFixed(1)}% to ${latestOpm.toFixed(1)}%, suggesting improving operating efficiency.`,
+    );
+  }
+  if (debtEquity !== null && debtEquity > 1.5) {
+    insights.push("Leverage appears elevated and should be monitored.");
+  }
+  if (fcf === null && cfo === null) {
+    insights.push(
+      "Cash-flow strength cannot be assessed from the uploaded documents.",
+    );
+  }
+  if (qualitative.managementGuidance) {
+    insights.push("Management guidance was extracted from the uploaded documents.");
+  }
+
+  const qualitativeItems: QualitativeItem[] = [
+    {
+      label: "Management commentary / guidance",
+      available: Boolean(qualitative.managementGuidance),
+      detail: qualitative.managementGuidance ?? "Data unavailable",
+    },
+    {
+      label: "Business / industry outlook",
+      available: Boolean(qualitative.businessOutlook),
+      detail: qualitative.businessOutlook ?? "Data unavailable",
+    },
+    {
+      label: "Growth drivers",
+      available: Boolean(qualitative.growthDrivers),
+      detail: qualitative.growthDrivers ?? "Data unavailable",
+    },
+    {
+      label: "Expansion / capacity plans",
+      available: Boolean(qualitative.expansionPlans),
+      detail: qualitative.expansionPlans ?? "Data unavailable",
+    },
+    {
+      label: "Capex plans",
+      available: Boolean(qualitative.capexPlans),
+      detail: qualitative.capexPlans ?? "Data unavailable",
+    },
+    {
+      label: "Disclosed risks",
+      available: Boolean(qualitative.risks),
+      detail: qualitative.risks ?? "Data unavailable",
+    },
+    {
+      label: "Competitive advantages",
+      available: false,
+      detail: "Data unavailable",
+    },
+    {
+      label: "Business model",
+      available: Boolean(qualitative.businessOutlook || qualitative.growthDrivers),
+      detail:
+        qualitative.businessOutlook ??
+        qualitative.growthDrivers ??
+        "Data unavailable",
+    },
+  ];
 
   const companyName = data.company ?? "the uploaded company";
   const thesis = {
@@ -1387,7 +1637,7 @@ export function analyzeLongTermInvestment(
 
   return {
     company: data.company,
-    periodsAvailable: data.periods.length,
+    periodsAvailable: periods.length,
     latestPeriod: latest,
     priorPeriod: prior,
     marketData: data.marketData,
@@ -1400,24 +1650,27 @@ export function analyzeLongTermInvestment(
     risks,
     overallScore,
     classification,
+    insufficientData,
     scoreExplanation,
+    insights,
+    qualitativeItems,
     thesis,
     chartData: {
       revenueByPeriod: chartSeries(
-        data.periods,
+        periods,
         (period) => period.incomeStatement.revenue,
       ),
       profitByPeriod: chartSeries(
-        data.periods,
+        periods,
         (period) => period.incomeStatement.netProfit,
       ),
-      marginTrend: chronological(data.periods).map((period) => ({
+      marginTrend: chronological(periods).map((period) => ({
         label: periodLabel(period),
         operating: operatingMarginOf(period),
         net: netMarginOf(period),
       })),
-      debtEquityByPeriod: chartSeries(data.periods, debtEquityOf),
-      cashFlowByPeriod: chartSeries(data.periods, (period) => {
+      debtEquityByPeriod: chartSeries(periods, debtEquityOf),
+      cashFlowByPeriod: chartSeries(periods, (period) => {
         if (period.cashFlow.freeCashFlow !== null) return period.cashFlow.freeCashFlow;
         return period.cashFlow.operatingCashFlow;
       }),

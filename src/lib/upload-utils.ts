@@ -1,7 +1,8 @@
 import type { UploadCategory } from "./upload-types";
 import {
+  PDF_EXTENSIONS,
+  PRESENTATION_EXTENSIONS,
   SCREENER_EXTENSIONS,
-  STATEMENT_EXTENSIONS,
 } from "./upload-types";
 
 export function formatFileSize(bytes: number): string {
@@ -26,7 +27,13 @@ export function isImageFile(file: File): boolean {
   return ["png", "jpg", "jpeg", "webp"].includes(ext);
 }
 
-export type DocumentKind = "pdf" | "spreadsheet" | "csv" | "image" | "unknown";
+export type DocumentKind =
+  | "pdf"
+  | "spreadsheet"
+  | "csv"
+  | "image"
+  | "presentation"
+  | "unknown";
 
 export function getDocumentKind(file: File): DocumentKind {
   if (isImageFile(file)) return "image";
@@ -34,6 +41,9 @@ export function getDocumentKind(file: File): DocumentKind {
   const ext = getExtension(file.name);
   if (ext === "pdf" || file.type === "application/pdf") return "pdf";
   if (ext === "csv" || file.type === "text/csv") return "csv";
+  if (["ppt", "pptx"].includes(ext) || file.type.includes("presentation") || file.type.includes("powerpoint")) {
+    return "presentation";
+  }
   if (
     ["xlsx", "xls"].includes(ext) ||
     file.type.includes("spreadsheet") ||
@@ -55,6 +65,8 @@ export function getDocumentLabel(kind: DocumentKind): string {
       return "CSV";
     case "image":
       return "Image";
+    case "presentation":
+      return "Presentation";
     default:
       return "Document";
   }
@@ -79,15 +91,21 @@ export function validateFileForCategory(
     return null;
   }
 
-  const isValidStatement =
-    isAllowedExtension(file.name, STATEMENT_EXTENSIONS) ||
-    getDocumentKind(file) !== "unknown";
-
-  if (!isValidStatement) {
-    return `"${file.name}" is not a supported format. Use PDF, XLSX, XLS, CSV, PNG, JPG, or JPEG.`;
+  if (category === "annual-report" || category === "quarterly-results") {
+    if (!isAllowedExtension(file.name, PDF_EXTENSIONS) && file.type !== "application/pdf") {
+      return `"${file.name}" must be a PDF.`;
+    }
+    return null;
   }
 
-  return null;
+  if (category === "investor-presentation") {
+    if (!isAllowedExtension(file.name, PRESENTATION_EXTENSIONS)) {
+      return `"${file.name}" is not a supported presentation format. Use PDF, PPT, or PPTX.`;
+    }
+    return null;
+  }
+
+  return `"${file.name}" is not a supported format for this category.`;
 }
 
 export function createFileId(file: File): string {

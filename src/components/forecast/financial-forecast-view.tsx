@@ -66,6 +66,18 @@ export function FinancialForecastView() {
         </p>
       </section>
 
+      {!model.canForecastRevenue && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-5 py-4">
+          <p className="text-sm font-medium text-amber-200">
+            Forecast unavailable — additional historical periods required.
+          </p>
+          <p className="mt-1 text-xs text-slate-400">
+            Historical tables still show whatever was extracted. No projected
+            values are invented from a single unsupported number.
+          </p>
+        </div>
+      )}
+
       <section className="rounded-xl border border-white/8 bg-[#0a0f1c]/60 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
           Historical Performance

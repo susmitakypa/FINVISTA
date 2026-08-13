@@ -155,7 +155,11 @@ const BALANCE_PATTERNS: FieldPattern[] = [
   { key: "totalAssets", labels: [/total assets/i, /assets total/i] },
   { key: "totalEquity", labels: [/total equity/i, /shareholders.? funds/i, /net worth/i, /total shareholders/i] },
   { key: "totalDebt", labels: [/total debt/i, /borrowings/i, /total borrowings/i, /debt/i] },
+  { key: "netDebt", labels: [/net debt/i] },
   { key: "cash", labels: [/cash and cash equivalents/i, /cash & cash equivalents/i, /\bcash\b/i] },
+  { key: "receivables", labels: [/trade receivables/i, /receivables/i] },
+  { key: "inventory", labels: [/inventor(?:y|ies)/i] },
+  { key: "payables", labels: [/trade payables/i, /payables/i] },
   { key: "currentAssets", labels: [/current assets/i, /total current assets/i] },
   { key: "currentLiabilities", labels: [/current liabilities/i, /total current liabilities/i] },
 ];
@@ -165,15 +169,19 @@ const CASHFLOW_PATTERNS: FieldPattern[] = [
   { key: "capitalExpenditure", labels: [/capital expenditure/i, /\bcapex\b/i, /purchase of fixed assets/i] },
   { key: "freeCashFlow", labels: [/free cash flow/i, /\bfcf\b/i] },
   { key: "financingCashFlow", labels: [/cash from financing/i, /financing cash flow/i, /net cash from financing/i] },
+  { key: "investingCashFlow", labels: [/cash from investing/i, /investing cash flow/i, /net cash from investing/i] },
 ];
 
 const RATIO_PATTERNS: FieldPattern[] = [
   { key: "debtToEquity", labels: [/debt.?equity/i, /debt to equity/i, /\bd\/e\b/i] },
   { key: "roe", labels: [/\broe\b/i, /return on equity/i] },
   { key: "roce", labels: [/\broce\b/i, /return on capital employed/i] },
+  { key: "roa", labels: [/\broa\b/i, /return on assets/i] },
   { key: "operatingMargin", labels: [/operating margin/i, /\bopm\b/i, /ebitda margin/i] },
   { key: "netProfitMargin", labels: [/net profit margin/i, /\bnpm\b/i, /profit margin/i] },
   { key: "interestCoverage", labels: [/interest coverage/i, /interest cover/i] },
+  { key: "currentRatio", labels: [/current ratio/i] },
+  { key: "assetTurnover", labels: [/asset turnover/i] },
 ];
 
 function lineMatchesLabel(line: string, labels: RegExp[]): boolean {
@@ -244,7 +252,11 @@ export function parseFinancialText(text: string) {
       totalAssets: null,
       totalEquity: null,
       totalDebt: null,
+      netDebt: null,
       cash: null,
+      receivables: null,
+      inventory: null,
+      payables: null,
       currentAssets: null,
       currentLiabilities: null,
     },
@@ -258,6 +270,7 @@ export function parseFinancialText(text: string) {
       capitalExpenditure: null,
       freeCashFlow: null,
       financingCashFlow: null,
+      investingCashFlow: null,
     },
     lines,
     CASHFLOW_PATTERNS,
@@ -268,9 +281,12 @@ export function parseFinancialText(text: string) {
       debtToEquity: null,
       roe: null,
       roce: null,
+      roa: null,
       operatingMargin: null,
       netProfitMargin: null,
       interestCoverage: null,
+      currentRatio: null,
+      assetTurnover: null,
     },
     lines,
     RATIO_PATTERNS.map((pattern) => ({
@@ -278,6 +294,7 @@ export function parseFinancialText(text: string) {
       preferPercentage: [
         "roe",
         "roce",
+        "roa",
         "operatingMargin",
         "netProfitMargin",
       ].includes(pattern.key),

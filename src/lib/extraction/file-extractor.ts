@@ -22,6 +22,8 @@ export async function extractTextFromFile(file: File): Promise<ExtractionResult>
         return await extractTextFromCsv(file);
       case "spreadsheet":
         return await extractTextFromSpreadsheet(file);
+      case "presentation":
+        return await extractTextFromPresentation(file);
       default:
         return {
           text: "",
@@ -114,4 +116,77 @@ async function extractTextFromSpreadsheet(file: File): Promise<ExtractionResult>
   }
 
   return { text };
+}
+
+async function extractTextFromPresentation(file: File): Promise<ExtractionResult> {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".ppt") && !name.endsWith(".pptx")) {
+    return {
+      text: "",
+      error:
+        "Legacy PPT files cannot be read in the browser. Upload a PDF or PPTX instead.",
+    };
+  }
+
+  try {
+    const text = await extractPptxSlideText(await file.arrayBuffer());
+    if (text.length < 10) {
+      return {
+        text,
+        error: "Presentation contained little extractable text.",
+      };
+    }
+    return { text };
+  } catch {
+    return {
+      text: "",
+      error: "Presentation could not be processed. Try a PDF export.",
+    };
+  }
+}
+
+async function extractPptxSlideText(buffer: ArrayBuffer): Promise<string> {
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const slides: string[] = [];
+  let offset = 0;
+
+  while (offset + 30 < bytes.length) {
+    if (view.getUint32(offset, true) !== 0x04034b50) break;
+    const method = view.getUint16(offset + 8, true);
+    const compSize = view.getUint32(offset + 18, true);
+    const nameLen = view.getUint16(offset + 26, true);
+    const extraLen = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const fileName = new TextDecoder().decode(
+      bytes.slice(nameStart, nameStart + nameLen),
+    );
+    const dataStart = nameStart + nameLen + extraLen;
+    const compressed = bytes.slice(dataStart, dataStart + compSize);
+    offset = dataStart + compSize;
+
+    if (!/^ppt\/slides\/slide\d+\.xml$/i.test(fileName)) continue;
+
+    let xmlBytes = compressed;
+    if (method === 8) {
+      xmlBytes = new Uint8Array(
+        await new Response(
+          new Blob([compressed]).stream().pipeThrough(
+            new DecompressionStream("deflate-raw"),
+          ),
+        ).arrayBuffer(),
+      );
+    } else if (method !== 0) {
+      continue;
+    }
+
+    const xml = new TextDecoder().decode(xmlBytes);
+    const parts = [...xml.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(
+      (match) => match[1] ?? "",
+    );
+    const slideText = parts.join(" ").trim();
+    if (slideText) slides.push(slideText);
+  }
+
+  return slides.join("\n").trim();
 }

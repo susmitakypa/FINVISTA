@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import type { ProcessedFileRecord } from "@/lib/financial-data-types";
 import type {
   UploadCategory,
   UploadCategoryConfig,
@@ -9,9 +10,17 @@ import type {
 import { formatFileSize } from "@/lib/upload-utils";
 import { FilePreview } from "./file-preview";
 
+type ProcessStatus =
+  | { status: "idle" }
+  | { status: "processing" }
+  | { status: "processed"; message: string }
+  | { status: "error"; message: string };
+
 type UploadCardProps = {
   config: UploadCategoryConfig;
   files: UploadedFileEntry[];
+  processState?: ProcessStatus;
+  processedRecords?: ProcessedFileRecord[];
   onAddFiles: (category: UploadCategory, files: FileList | File[]) => void;
   onRemoveFile: (category: UploadCategory, id: string) => void;
 };
@@ -76,21 +85,34 @@ function SpinnerIcon() {
 
 function UploadedFileRow({
   entry,
+  processState,
+  processedRecord,
   onRemove,
 }: {
   entry: UploadedFileEntry;
+  processState?: ProcessStatus;
+  processedRecord?: ProcessedFileRecord;
   onRemove: () => void;
 }) {
   const { file, previewUrl, status, error } = entry;
+  const isProcessing = processState?.status === "processing" && status === "success";
+  const isProcessedSuccess =
+    processState?.status === "processed" &&
+    status === "success" &&
+    processedRecord?.status !== "failed";
+  const failedAfterProcess =
+    processState?.status === "processed" && processedRecord?.status === "failed";
 
   return (
     <li
       className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
-        status === "error"
+        status === "error" || failedAfterProcess
           ? "border-rose-500/20 bg-rose-500/[0.04]"
-          : status === "success"
+          : isProcessedSuccess
             ? "border-emerald-500/15 bg-emerald-500/[0.03]"
-            : "border-white/8 bg-white/[0.02]"
+            : status === "success"
+              ? "border-emerald-500/15 bg-emerald-500/[0.03]"
+              : "border-white/8 bg-white/[0.02]"
       }`}
     >
       <FilePreview file={file} previewUrl={previewUrl} compact />
@@ -105,10 +127,21 @@ function UploadedFileRow({
               Uploading…
             </span>
           )}
-          {status === "success" && (
+          {isProcessing && (
+            <span className="inline-flex items-center gap-1 text-xs text-indigo-300">
+              <SpinnerIcon />
+              Processing…
+            </span>
+          )}
+          {status === "success" && !isProcessing && !failedAfterProcess && (
             <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
               <CheckCircleIcon />
-              Ready
+              {isProcessedSuccess ? "Successfully processed" : "Ready"}
+            </span>
+          )}
+          {failedAfterProcess && (
+            <span className="text-xs text-rose-400">
+              {processedRecord?.error ?? "Could not be processed"}
             </span>
           )}
           {status === "error" && error && (
@@ -142,6 +175,8 @@ function UploadedFileRow({
 export function UploadCard({
   config,
   files,
+  processState,
+  processedRecords,
   onAddFiles,
   onRemoveFile,
 }: UploadCardProps) {
@@ -276,6 +311,8 @@ export function UploadCard({
             <UploadedFileRow
               key={entry.id}
               entry={entry}
+              processState={processState}
+              processedRecord={processedRecords?.find((record) => record.id === entry.id)}
               onRemove={() => onRemoveFile(config.id, entry.id)}
             />
           ))}

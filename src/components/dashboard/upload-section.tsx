@@ -29,20 +29,23 @@ export function UploadSection() {
           id="upload-heading"
           className="text-sm font-semibold uppercase tracking-wider text-slate-300"
         >
-          Upload Financial Data
+          Upload Financial Documents
         </h2>
         <p className="mt-1 text-sm text-slate-500">
-          Add Screener screenshots, Balance Sheet, and Profit &amp; Loss files to
-          prepare for analysis. Files are stored locally in your browser.
+          {totalFileCount === 0
+            ? "Upload financial documents to begin analysis. Any one source is enough — missing documents never block the rest."
+            : "Files are stored locally in your browser. Process whatever you have uploaded; unused categories stay optional."}
         </p>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid gap-5 md:grid-cols-2">
         {UPLOAD_CATEGORIES.map((config) => (
           <UploadCard
             key={config.id}
             config={config}
-            files={filesByCategory[config.id]}
+            files={filesByCategory[config.id] ?? []}
+            processState={processState}
+            processedRecords={financialData?.sourceFiles}
             onAddFiles={addFiles}
             onRemoveFile={removeFile}
           />

@@ -25,7 +25,11 @@ export type BalanceSheet = {
   totalAssets: FinancialValue;
   totalEquity: FinancialValue;
   totalDebt: FinancialValue;
+  netDebt: FinancialValue;
   cash: FinancialValue;
+  receivables: FinancialValue;
+  inventory: FinancialValue;
+  payables: FinancialValue;
   currentAssets: FinancialValue;
   currentLiabilities: FinancialValue;
 };
@@ -35,15 +39,19 @@ export type CashFlow = {
   capitalExpenditure: FinancialValue;
   freeCashFlow: FinancialValue;
   financingCashFlow: FinancialValue;
+  investingCashFlow: FinancialValue;
 };
 
 export type FinancialRatios = {
   debtToEquity: FinancialValue;
   roe: FinancialValue;
   roce: FinancialValue;
+  roa: FinancialValue;
   operatingMargin: FinancialValue;
   netProfitMargin: FinancialValue;
   interestCoverage: FinancialValue;
+  currentRatio: FinancialValue;
+  assetTurnover: FinancialValue;
 };
 
 export type PeriodFinancialData = {
@@ -92,10 +100,29 @@ export function createEmptyMarketData(): MarketData {
   };
 }
 
+export type QualitativeInsights = {
+  managementGuidance: string | null;
+  businessOutlook: string | null;
+  growthDrivers: string | null;
+  risks: string | null;
+  capexPlans: string | null;
+  expansionPlans: string | null;
+};
+
+export type DocumentCoverage = {
+  screener: boolean;
+  annualReport: boolean;
+  investorPresentation: boolean;
+  quarterlyResults: boolean;
+};
+
 export type NormalizedFinancialData = {
   company: string | null;
+  currency: string | null;
   periods: PeriodFinancialData[];
   marketData: MarketData;
+  qualitative: QualitativeInsights;
+  documentCoverage: DocumentCoverage;
   sourceFiles: ProcessedFileRecord[];
   summary: ProcessingSummary;
 };
@@ -116,7 +143,11 @@ export function createEmptyBalanceSheet(): BalanceSheet {
     totalAssets: null,
     totalEquity: null,
     totalDebt: null,
+    netDebt: null,
     cash: null,
+    receivables: null,
+    inventory: null,
+    payables: null,
     currentAssets: null,
     currentLiabilities: null,
   };
@@ -128,6 +159,7 @@ export function createEmptyCashFlow(): CashFlow {
     capitalExpenditure: null,
     freeCashFlow: null,
     financingCashFlow: null,
+    investingCashFlow: null,
   };
 }
 
@@ -136,9 +168,32 @@ export function createEmptyRatios(): FinancialRatios {
     debtToEquity: null,
     roe: null,
     roce: null,
+    roa: null,
     operatingMargin: null,
     netProfitMargin: null,
     interestCoverage: null,
+    currentRatio: null,
+    assetTurnover: null,
+  };
+}
+
+export function createEmptyQualitative(): QualitativeInsights {
+  return {
+    managementGuidance: null,
+    businessOutlook: null,
+    growthDrivers: null,
+    risks: null,
+    capexPlans: null,
+    expansionPlans: null,
+  };
+}
+
+export function createEmptyDocumentCoverage(): DocumentCoverage {
+  return {
+    screener: false,
+    annualReport: false,
+    investorPresentation: false,
+    quarterlyResults: false,
   };
 }
 
@@ -172,11 +227,42 @@ export function countExtractedFields(period: PeriodFinancialData): number {
   }, 0);
 }
 
+export function countPossiblePeriodFields(): number {
+  return (
+    Object.keys(createEmptyIncomeStatement()).length +
+    Object.keys(createEmptyBalanceSheet()).length +
+    Object.keys(createEmptyCashFlow()).length +
+    Object.keys(createEmptyRatios()).length
+  );
+}
+
 export function countAllExtractedFields(periods: PeriodFinancialData[]): number {
   return periods.reduce(
     (total, period) => total + countExtractedFields(period),
     0,
   );
+}
+
+export function metricCoverage(data: NormalizedFinancialData): {
+  available: number;
+  unavailable: number;
+  total: number;
+} {
+  const richest =
+    data.periods.length === 0
+      ? null
+      : data.periods.reduce((best, period) =>
+          countExtractedFields(period) > countExtractedFields(best)
+            ? period
+            : best,
+        );
+  const total = countPossiblePeriodFields();
+  const available = richest ? countExtractedFields(richest) : 0;
+  return {
+    available,
+    unavailable: Math.max(total - available, 0),
+    total,
+  };
 }
 
 export type DashboardStatus =
@@ -186,9 +272,58 @@ export type DashboardStatus =
   | "processed";
 
 export function formatFinancialValue(value: FinancialValue): string {
-  if (value === null) return "Not available";
+  if (value === null) return "Data unavailable";
   if (Math.abs(value) >= 1_000_000) {
     return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   }
   return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+export function hydrateNormalizedData(
+  raw: NormalizedFinancialData,
+): NormalizedFinancialData {
+  return {
+    company: raw.company ?? null,
+    currency: raw.currency ?? null,
+    periods: (raw.periods ?? []).map((period) => ({
+      period: period.period ?? null,
+      year: period.year ?? null,
+      incomeStatement: {
+        ...createEmptyIncomeStatement(),
+        ...period.incomeStatement,
+      },
+      balanceSheet: {
+        ...createEmptyBalanceSheet(),
+        ...period.balanceSheet,
+      },
+      cashFlow: {
+        ...createEmptyCashFlow(),
+        ...period.cashFlow,
+      },
+      ratios: {
+        ...createEmptyRatios(),
+        ...period.ratios,
+      },
+    })),
+    marketData: {
+      ...createEmptyMarketData(),
+      ...raw.marketData,
+    },
+    qualitative: {
+      ...createEmptyQualitative(),
+      ...raw.qualitative,
+    },
+    documentCoverage: {
+      ...createEmptyDocumentCoverage(),
+      ...raw.documentCoverage,
+    },
+    sourceFiles: raw.sourceFiles ?? [],
+    summary: raw.summary ?? {
+      filesProcessed: 0,
+      filesSuccessfullyParsed: 0,
+      filesRequiringReview: 0,
+      totalFieldsExtracted: 0,
+      processedAt: new Date().toISOString(),
+    },
+  };
 }

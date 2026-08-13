@@ -40,6 +40,11 @@ export function LongTermMetricGrid({ title, metrics }: MetricGridProps) {
             >
               {entry.formatted}
             </p>
+            {!entry.available && entry.unavailableHint && (
+              <p className="mt-1 text-[11px] text-slate-500">
+                {entry.unavailableHint}
+              </p>
+            )}
             <p className="mt-2 text-[11px] text-slate-500">{entry.formula}</p>
             {entry.inputsUsed.length > 0 && (
               <ul className="mt-2 space-y-1">
