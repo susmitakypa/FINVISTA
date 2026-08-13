@@ -1,7 +1,8 @@
 "use client";
 
-import { useFinancialUploads } from "@/hooks/use-financial-uploads";
+import { useFinancialSession } from "@/context/financial-session-context";
 import { UPLOAD_CATEGORIES } from "@/lib/upload-types";
+import { ProcessingSummaryCard } from "./processing-summary";
 import { UploadActions } from "./upload/upload-actions";
 import { UploadCard } from "./upload/upload-card";
 
@@ -11,11 +12,12 @@ export function UploadSection() {
     totalFileCount,
     hasSuccessfulFiles,
     processState,
+    financialData,
     addFiles,
     removeFile,
     clearAll,
     processFiles,
-  } = useFinancialUploads();
+  } = useFinancialSession();
 
   return (
     <section
@@ -31,7 +33,7 @@ export function UploadSection() {
         </h2>
         <p className="mt-1 text-sm text-slate-500">
           Add Screener screenshots, Balance Sheet, and Profit &amp; Loss files to
-          prepare for analysis. Files are stored locally in this session only.
+          prepare for analysis. Files are stored locally in your browser.
         </p>
       </div>
 
@@ -51,9 +53,16 @@ export function UploadSection() {
         totalFileCount={totalFileCount}
         hasSuccessfulFiles={hasSuccessfulFiles}
         processState={processState}
+        financialData={financialData}
         onClearAll={clearAll}
         onProcess={processFiles}
       />
+
+      {financialData && processState.status === "processed" && (
+        <div className="mt-6">
+          <ProcessingSummaryCard data={financialData} />
+        </div>
+      )}
     </section>
   );
 }

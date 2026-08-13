@@ -1,13 +1,16 @@
 "use client";
 
+import type { NormalizedFinancialData } from "@/lib/financial-data-types";
+
 type UploadActionsProps = {
   totalFileCount: number;
   hasSuccessfulFiles: boolean;
   processState:
     | { status: "idle" }
     | { status: "processing" }
-    | { status: "ready"; message: string }
+    | { status: "processed"; message: string }
     | { status: "error"; message: string };
+  financialData: NormalizedFinancialData | null;
   onClearAll: () => void;
   onProcess: () => void;
 };
@@ -41,6 +44,7 @@ export function UploadActions({
   totalFileCount,
   hasSuccessfulFiles,
   processState,
+  financialData,
   onClearAll,
   onProcess,
 }: UploadActionsProps) {
@@ -53,7 +57,9 @@ export function UploadActions({
           <button
             type="button"
             onClick={onClearAll}
-            disabled={totalFileCount === 0 || isProcessing}
+            disabled={
+              (totalFileCount === 0 && !financialData) || isProcessing
+            }
             className="rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-400 transition-all duration-200 hover:border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Clear All
@@ -82,7 +88,7 @@ export function UploadActions({
         </button>
       </div>
 
-      {processState.status === "ready" && (
+      {processState.status === "processed" && (
         <div
           role="status"
           className="flex items-start gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] px-4 py-3"
@@ -98,9 +104,17 @@ export function UploadActions({
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
             <polyline points="22 4 12 14.01 9 11.01" />
           </svg>
-          <p className="text-sm font-medium text-emerald-200">
-            {processState.message}
-          </p>
+          <div>
+            <p className="text-sm font-medium text-emerald-200">
+              {processState.message}
+            </p>
+            {financialData?.company && (
+              <p className="mt-1 text-xs text-emerald-300/70">
+                Company: {financialData.company} ·{" "}
+                {financialData.summary.totalFieldsExtracted} fields extracted
+              </p>
+            )}
+          </div>
         </div>
       )}
 
