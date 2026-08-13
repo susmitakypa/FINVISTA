@@ -1,5 +1,5 @@
-import { ComingSoon } from "@/components/dashboard/coming-soon";
+import { FinancialForecastView } from "@/components/forecast/financial-forecast-view";
 
 export default function FinancialForecastPage() {
-  return <ComingSoon moduleName="Financial Forecast" />;
+  return <FinancialForecastView />;
 }
