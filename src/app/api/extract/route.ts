@@ -4,6 +4,7 @@ import {
   isAllowedScreenshot,
   parseUploadCategory,
   toExcelCsv,
+  toExcelExtractResponse,
 } from "@/lib/excel/run-excel-extract";
 
 export const runtime = "nodejs";
@@ -114,9 +115,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    const payload = await extractScreenshotsForExcel(images, category);
-    if (format === "csv") return csvResponse(toExcelCsv(payload));
-    return json(payload);
+    const data = await extractScreenshotsForExcel(images, category);
+    if (format === "csv") {
+      return csvResponse(toExcelCsv(toExcelExtractResponse(data)));
+    }
+    return json({
+      source: "finvista-extract-api",
+      ...data,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Screenshot extraction failed.";

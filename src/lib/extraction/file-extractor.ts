@@ -43,31 +43,82 @@ async function extractTextFromImage(file: File): Promise<ExtractionResult> {
     return { text: "", error: "Unreadable image format." };
   }
 
-  const Tesseract = await import("tesseract.js");
-  const worker = await Tesseract.createWorker("eng", 1, {
-    logger: () => undefined,
-  });
+  const prepared = await tesseractImageInput(file);
   try {
-    await worker.setParameters({
-      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+    const Tesseract = await import("tesseract.js");
+    const worker = await Tesseract.createWorker("eng", 1, {
+      logger: () => undefined,
     });
-    const result = await worker.recognize(file);
-    const text = result.data.text?.trim() ?? "";
-    const confidence =
-      typeof result.data.confidence === "number"
-        ? Math.min(1, Math.max(0, result.data.confidence / 100))
-        : undefined;
-    if (text.length < 10) {
-      return {
-        text,
-        confidence,
-        error: "Image text could not be read clearly. Try a sharper screenshot.",
-      };
+    try {
+      await worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+      });
+      const result = await worker.recognize(prepared.image);
+      const text = result.data.text?.trim() ?? "";
+      const confidence =
+        typeof result.data.confidence === "number"
+          ? Math.min(1, Math.max(0, result.data.confidence / 100))
+          : undefined;
+      if (text.length < 10) {
+        return {
+          text,
+          confidence,
+          error: "Image text could not be read clearly. Try a sharper screenshot.",
+        };
+      }
+      return { text, confidence };
+    } finally {
+      await worker.terminate();
     }
-    return { text, confidence };
   } finally {
-    await worker.terminate();
+    await prepared.cleanup();
   }
+}
+
+async function tesseractImageInput(file: File): Promise<{
+  image: File | string;
+  cleanup: () => Promise<void>;
+}> {
+  if (typeof window !== "undefined") {
+    return { image: file, cleanup: async () => undefined };
+  }
+
+  const { writeFile, unlink } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const ext = imageExtension(file, bytes);
+  const tempPath = join(
+    tmpdir(),
+    `finvista-ocr-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
+  );
+  await writeFile(tempPath, bytes);
+  return {
+    image: tempPath,
+    cleanup: async () => {
+      await unlink(tempPath).catch(() => undefined);
+    },
+  };
+}
+
+function imageExtension(file: File, bytes: Buffer): string {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return ".png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return ".jpg";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+    bytes.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return ".webp";
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return ".jpg";
+  if (name.endsWith(".webp")) return ".webp";
+  return ".png";
 }
 
 async function extractTextFromPdf(file: File): Promise<ExtractionResult> {

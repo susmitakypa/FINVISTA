@@ -1,11 +1,8 @@
 import { processFinancialFiles } from "@/lib/extraction/process-financial-files";
+import type { NormalizedFinancialData } from "@/lib/financial-data-types";
 import type { UploadCategory } from "@/lib/upload-types";
 import { isImageFile } from "@/lib/upload-utils";
-import {
-  toExcelCsv,
-  toExcelExtractResponse,
-  type ExcelExtractResponse,
-} from "./excel-extract-response";
+import { toExcelCsv, toExcelExtractResponse } from "./excel-extract-response";
 
 const ALLOWED_CATEGORIES: UploadCategory[] = [
   "screener",
@@ -34,17 +31,32 @@ export function isAllowedScreenshot(file: File): boolean {
   return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp");
 }
 
+function mimeForScreenshot(file: File): string {
+  if (file.type && IMAGE_TYPES.has(file.type)) return file.type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".webp")) return "image/webp";
+  return "image/png";
+}
+
 export async function extractScreenshotsForExcel(
   files: File[],
   category: UploadCategory,
-): Promise<ExcelExtractResponse> {
-  const inputs = files.map((file, index) => ({
-    id: `excel-${Date.now()}-${index}`,
-    file,
-    category,
-  }));
-  const data = await processFinancialFiles(inputs);
-  return toExcelExtractResponse(data);
+): Promise<NormalizedFinancialData> {
+  const inputs = await Promise.all(
+    files.map(async (file, index) => {
+      const bytes = await file.arrayBuffer();
+      const copy = new File([bytes], file.name || `screenshot-${index + 1}.png`, {
+        type: mimeForScreenshot(file),
+      });
+      return {
+        id: `excel-${Date.now()}-${index}`,
+        file: copy,
+        category,
+      };
+    }),
+  );
+  return processFinancialFiles(inputs);
 }
 
-export { toExcelCsv };
+export { toExcelCsv, toExcelExtractResponse };
