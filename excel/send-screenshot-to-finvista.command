@@ -1,0 +1,1 @@
+send-screenshots-to-finvista.command
