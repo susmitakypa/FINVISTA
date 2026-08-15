@@ -13,7 +13,37 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 10;
+
+class ExtractTimeoutError extends Error {
+  constructor() {
+    super(
+      "Screenshot OCR took too long for this server. Try one smaller Screener screenshot, or extract in the FinVista dashboard instead.",
+    );
+    this.name = "ExtractTimeoutError";
+  }
+}
+
+function extractBudgetMs(): number {
+  if (process.env.VERCEL) return 8_000;
+  return 180_000;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ExtractTimeoutError()), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 const MAX_FILES = 8;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -49,7 +79,14 @@ const UPLOAD_PAGE = `<!DOCTYPE html>
 `;
 
 function json(body: unknown, status = 200) {
-  return NextResponse.json(body, { status, headers: CORS_HEADERS });
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      ...CORS_HEADERS,
+      "Cache-Control": "no-store",
+      "Content-Disposition": "inline",
+    },
+  });
 }
 
 function csvResponse(csv: string) {
@@ -142,9 +179,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const data = await extractScreenshotsForExcel(images, category);
+    const data = await withTimeout(
+      extractScreenshotsForExcel(images, category),
+      extractBudgetMs(),
+    );
     return csvResponse(toExcelCsv(toExcelExtractResponse(data)));
   } catch (error) {
+    if (error instanceof ExtractTimeoutError) {
+      return json({ error: error.message }, 504);
+    }
     const message =
       error instanceof Error ? error.message : "Screenshot extraction failed.";
     return json({ error: message }, 500);

@@ -51,12 +51,12 @@ if [ "$CURL_EXIT" -ne 0 ]; then
   exit 1
 fi
 
-cp "$HTTP_CSV" "$CSV_PATH"
-
 if [ "$STATUS" != "200" ]; then
-  osascript -e "display dialog \"FinVista returned HTTP ${STATUS}. The response is in Downloads/FinVista/extract.csv\" buttons {\"OK\"} default button 1 with title \"FinVista\""
+  osascript -e "display dialog \"FinVista could not extract this screenshot (HTTP ${STATUS}). extract.csv was not updated.\" buttons {\"OK\"} default button 1 with title \"FinVista\""
   exit 1
 fi
+
+cp "$HTTP_CSV" "$CSV_PATH"
 
 if [ -d "/Applications/Microsoft Excel.app" ]; then
   open -a "Microsoft Excel" "$CSV_PATH"
