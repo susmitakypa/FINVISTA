@@ -45,6 +45,19 @@ async function extractTextFromImage(file: File): Promise<ExtractionResult> {
 
   const prepared = await tesseractImageInput(file);
   try {
+    if (typeof window === "undefined" && typeof prepared.image === "string") {
+      const { recognizeImageOnServer } = await import("./server-ocr");
+      const { text, confidence } = await recognizeImageOnServer(prepared.image);
+      if (text.length < 10) {
+        return {
+          text,
+          confidence,
+          error: "Image text could not be read clearly. Try a sharper screenshot.",
+        };
+      }
+      return { text, confidence };
+    }
+
     const Tesseract = await import("tesseract.js");
     const worker = await Tesseract.createWorker("eng", 1, {
       logger: () => undefined,
