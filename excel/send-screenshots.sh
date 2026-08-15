@@ -12,7 +12,7 @@ if [ "$#" -lt 1 ]; then
   exit 1
 fi
 
-BASE_URL="${FINVISTA_URL:-http://localhost:3000}"
+BASE_URL="${FINVISTA_URL:-https://finvista-app-lemon.vercel.app}"
 API_KEY="${FINVISTA_API_KEY:-}"
 FORMAT="${FINVISTA_FORMAT:-json}"
 
