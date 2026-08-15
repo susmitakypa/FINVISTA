@@ -1,11 +1,10 @@
 #!/bin/bash
-# FinVista → Excel on Mac (no VBA, no macros).
+# FinVista → Excel on Mac (no VBA, no macros, no API key).
 # Double-click this file, pick a Screener screenshot, Excel opens the CSV.
 
 set -euo pipefail
 
 BASE_URL="${FINVISTA_URL:-https://finvista-app-lemon.vercel.app}"
-API_KEY="${FINVISTA_API_KEY:-}"
 OUT_DIR="${HOME}/Downloads/FinVista"
 mkdir -p "$OUT_DIR"
 
@@ -29,20 +28,12 @@ if [ -z "${FILE_LIST//[[:space:]]/}" ]; then
   exit 0
 fi
 
-if [ -z "$API_KEY" ]; then
-  API_KEY="$(osascript -e 'text returned of (display dialog "Enter FINVISTA_API_KEY (same as Vercel)" default answer "" with hidden answer with title "FinVista")' 2>/dev/null || true)"
-fi
-if [ -z "$API_KEY" ]; then
-  osascript -e 'display dialog "FINVISTA_API_KEY is required." buttons {"OK"} default button 1 with title "FinVista"'
-  exit 1
-fi
-
 CSV_PATH="$OUT_DIR/extract.csv"
 HTTP_CSV="$(mktemp)"
 STATUS_FILE="$(mktemp)"
 trap 'rm -f "$HTTP_CSV" "$STATUS_FILE"' EXIT
 
-CURL_ARGS=(-sS --max-time 180 -X POST "${BASE_URL}/api/extract" -F "format=csv" -H "X-Api-Key: ${API_KEY}")
+CURL_ARGS=(-sS --max-time 180 -X POST "${BASE_URL}/api/excel/extract")
 while IFS= read -r path; do
   path="${path%$'\r'}"
   [ -z "$path" ] && continue
